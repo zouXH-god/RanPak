@@ -1,0 +1,20 @@
+@tailwind base; @tailwind components; @tailwind utilities;
+:root { --radius: 20px; }
+* { scrollbar-width: thin; scrollbar-color: rgba(0,0,0,0.2) transparent; }
+*::-webkit-scrollbar { height: 8px; width: 8px; }
+*::-webkit-scrollbar-thumb { border-radius: 8px; background: rgba(0,0,0,0.18); }
+.header-drag{
+    -webkit-app-region: drag;
+    position: absolute;
+    left: 0;
+    top: 0;
+    padding: 32px 54px 0;
+}
+.top-app-region{
+    -webkit-app-region: drag;
+    height: 1rem;
+    position: fixed;
+    top: 0;
+    z-index: 1000;
+    width: 100%;
+}

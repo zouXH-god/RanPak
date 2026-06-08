@@ -1,0 +1,18 @@
+node_modules/
+release/
+web/dist/
+app/web-dist/
+app/temp/
+app/assets/live2d/
+.npm-cache/
+*.log
+.idea/
+web/.idea/
+app/.idea/
+app/config/dns.yaml
+
+# Live2D data packages are external runtime assets.
+web/public/vendor/live2d-widget/covers/
+web/public/vendor/live2d-widget/default-models/
+web/public/vendor/live2d-widget/model-catalog.json
+web/public/vendor/live2d-widget/live2d-widget-model-*/

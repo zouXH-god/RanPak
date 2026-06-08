@@ -1,0 +1,9 @@
+:root {
+  --el-color-primary: #FF6A3D;
+  --el-color-success: #2CD4D9;
+  --el-color-warning: #FFB48E;
+  --el-color-info: #6C63FF;
+  --el-border-radius-base: 12px;
+  --el-border-radius-small: 10px;
+  --el-font-size-base: 14px;
+}

@@ -1,0 +1,20 @@
+dns_access:
+  - name: "aliyun-demo"
+    type: "ali"
+    access_key_id: "your-aliyun-access-key-id"
+    access_key_secret: "your-aliyun-access-key-secret"
+
+  - name: "tencent-demo"
+    type: "Tencent"
+    access_key_id: "your-tencent-secret-id"
+    access_key_secret: "your-tencent-secret-key"
+
+  - name: "cloudflare-demo"
+    type: "cloudflare"
+    access_key_secret: "your-cloudflare-api-token"
+
+  - name: "godaddy-demo"
+    type: "godaddy"
+    access_key_id: "your-godaddy-api-key"
+    access_key_secret: "your-godaddy-api-secret"
+    base_url: "https://api.godaddy.com"
