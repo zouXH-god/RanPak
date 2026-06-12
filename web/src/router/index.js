@@ -8,6 +8,7 @@ const Dns = () => import('../pages/Dns.vue')
 const JsonEditor = () => import('../pages/JsonEditor.vue')
 const BaseStringConvert = () => import('../pages/BaseStringConvert.vue')
 const HttpRequestTool = () => import('../pages/HttpRequestTool.vue')
+const SshTool = () => import('../pages/SshTool.vue')
 const RandomStringTool = () => import('../pages/RandomStringTool.vue')
 const SslCertificateTool = () => import('../pages/SslCertificateTool.vue')
 const UuidTool = () => import('../pages/UuidTool.vue')
@@ -40,6 +41,8 @@ const ReminderWindow = () => import('../pages/ReminderWindow.vue')
 const TimeTools = () => import('../pages/TimeToolsRuntime.vue')
 const TimerDisplayWindow = () => import('../pages/TimerDisplayWindow.vue')
 const Clicker = () => import('../pages/Clicker.vue')
+const TaskFlow = () => import('../pages/TaskFlow.vue')
+const TaskFlowOverlay = () => import('../pages/TaskFlowOverlay.vue')
 
 export default createRouter({
   history: createWebHistory(),
@@ -51,6 +54,7 @@ export default createRouter({
     { path: '/json-editor', name: 'jsonEditor', component: JsonEditor, meta: { title: 'JSON 编辑器' } },
     { path: '/base-string-convert', name: 'baseStringConvert', component: BaseStringConvert, meta: { title: 'Base 字符串转换' } },
     { path: '/http-request', name: 'httpRequestTool', component: HttpRequestTool, meta: { title: 'HTTP 请求工具' } },
+    { path: '/ssh-tool', name: 'sshTool', component: SshTool, meta: { title: 'SSH 工具' } },
     { path: '/random-string', name: 'randomStringTool', component: RandomStringTool, meta: { title: '随机字符串生成' } },
     { path: '/ssl-certificate', name: 'sslCertificateTool', component: SslCertificateTool, meta: { title: 'SSL 证书查询' } },
     { path: '/uuid-tool', name: 'uuidTool', component: UuidTool, meta: { title: 'UUID 生成' } },
@@ -89,6 +93,8 @@ export default createRouter({
     { path: '/preview-child-window', name: 'previewChildWindow', component: OverlayChildWindow, meta: { title: '桌面部件预览', overlay: true } },
     { path: '/reminder-window', name: 'reminderWindow', component: ReminderWindow, meta: { title: '提醒', overlay: true } },
     { path: '/timer-display-window', name: 'timerDisplayWindow', component: TimerDisplayWindow, meta: { title: '定时器展示', overlay: true } },
+    { path: '/task-flow', name: 'taskFlow', component: TaskFlow, meta: { title: '任务流助手' } },
+    { path: '/task-flow-overlay', name: 'taskFlowOverlay', component: TaskFlowOverlay, meta: { title: '任务流', overlay: true } },
     { path: '/clicker', name: 'clicker', component: Clicker, meta: { title: '模拟点击' } },
     { path: '/standups', name: 'standups', component: Standups, meta: { title: 'Standups' } },
     { path: '/calendar', name: 'calendar', component: Calendar, meta: { title: 'My Calendar' } },

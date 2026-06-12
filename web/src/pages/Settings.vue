@@ -6,6 +6,17 @@
         <p class="mt-1 text-sm text-gray-500">配置外置工具与资源目录，应用会在运行时读取这些路径。</p>
       </header>
 
+      <section class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+        <div class="mb-4">
+          <h2 class="text-base font-semibold text-gray-900">启动</h2>
+          <p class="mt-1 text-sm text-gray-500">配置应用的启动行为。</p>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-sm text-gray-700">开机自启动</span>
+          <el-switch v-model="autoLaunch" @change="toggleAutoLaunch" />
+        </div>
+      </section>
+
       <section
         id="settings-ffmpeg"
         ref="ffmpegSection"
@@ -105,6 +116,7 @@ const form = reactive({
     catalogPath: '',
   },
 })
+const autoLaunch = ref(false)
 const saving = ref(false)
 const testingFfmpeg = ref(false)
 const checkingLive2d = ref(false)
@@ -124,6 +136,7 @@ const live2dStatusLabel = computed(() => live2dError.value ? '不可用' : live2
 const live2dTagType = computed(() => live2dError.value ? 'danger' : live2dModelCount.value ? 'success' : 'info')
 
 onMounted(async () => {
+  autoLaunch.value = await window.electronAPI?.getAutoLaunch?.() || false
   await loadConfig()
   await testFfmpeg()
   await checkLive2d()
@@ -212,6 +225,10 @@ async function scrollToRequestedSection() {
   window.setTimeout(() => {
     if (activeSection.value === section) activeSection.value = ''
   }, 1800)
+}
+
+async function toggleAutoLaunch(value) {
+  await window.electronAPI?.setAutoLaunch?.(value)
 }
 
 function sectionHighlightClass(section) {

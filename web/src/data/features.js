@@ -19,6 +19,7 @@ export const featureGroups = [
       { label: 'JSON 编辑器', description: '编辑、格式化、校验和导入导出 JSON。', icon: 'Document', to: '/json-editor', keywords: ['json'] },
       { label: 'Base 字符串转换', description: '将字符串或文件转换为 Base64、Base32、Base58 等编码。', icon: 'Connection', to: '/base-string-convert', keywords: ['base64', 'base32', 'base58', '编码'] },
       { label: 'HTTP 请求', description: '发送接口请求，支持 curl 导入、Headers、Body 和响应查看。', icon: 'Promotion', to: '/http-request', keywords: ['http', 'request', 'curl', 'api'] },
+      { label: 'SSH 工具', description: '管理 SSH 连接、SFTP 文件和本地/远程端口映射。', icon: 'Connection', to: '/ssh-tool', keywords: ['ssh', 'sftp', 'tunnel', 'port', '端口映射'] },
       { label: 'SSL 证书查询', description: '查询 TLS 证书、有效期、签发者和 SAN。', icon: 'Lock', to: '/ssl-certificate', keywords: ['ssl', 'tls', 'certificate', '证书'] },
       { label: '随机字符串', description: '按长度、数量和字符集生成随机字符串。', icon: 'Key', to: '/random-string', keywords: ['random', 'password', '随机'] },
       { label: 'UUID 生成', description: '批量生成 UUID v4。', icon: 'Tickets', to: '/uuid-tool', keywords: ['uuid', 'guid'] },
@@ -39,6 +40,7 @@ export const featureGroups = [
       { label: '闹钟', description: '配置提醒时间、重复规则和提示内容。', icon: 'Bell', to: '/time-tools-alarm', keywords: ['alarm', '提醒'] },
       { label: '定时器', description: '设置倒计时并可打开展示窗口。', icon: 'Timer', to: '/time-tools-timer', keywords: ['timer', '倒计时'] },
       { label: '番茄钟', description: '配置专注和休息时长。', icon: 'CoffeeCup', to: '/time-tools-pomodoro', keywords: ['pomodoro', '番茄'] },
+      { label: '任务流助手', description: '创建任务流并逐步执行节点。', icon: 'List', to: '/task-flow', keywords: ['task', 'flow', '任务', '流程', '步骤'] },
     ],
   },
   {

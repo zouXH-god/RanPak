@@ -60,7 +60,21 @@ Remove-Live2dDataPackages (Join-Path $bundledDist "vendor\live2d-widget")
 
 Write-Host "==> Packaging Windows exe"
 if (Test-Path $releaseDir) {
-    Remove-Item -LiteralPath $releaseDir -Recurse -Force
+    # Only remove electron-builder artifacts, preserve user files (e.g. Live2D resources)
+    $builderArtifacts = Get-ChildItem -LiteralPath $releaseDir -Force | Where-Object {
+        $_.Name -eq "win-unpacked" -or
+        $_.Name -eq "linux-unpacked" -or
+        $_.Name -eq "mac" -or
+        $_.Name -like "*.exe" -or
+        $_.Name -like "*.exe.blockmap" -or
+        $_.Name -like "*.dmg" -or
+        $_.Name -like "*.AppImage" -or
+        $_.Name -like "builder-*.yml" -or
+        $_.Name -like "builder-*.yaml"
+    }
+    foreach ($artifact in $builderArtifacts) {
+        Remove-Item -LiteralPath $artifact.FullName -Recurse -Force
+    }
 }
 Push-Location $appDir
 npm run dist:win

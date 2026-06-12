@@ -10,6 +10,8 @@ declare global {
             apiBaseUrl?: string
             selectVideoFiles?: () => Promise<string[]>
             selectImageFiles?: () => Promise<string[]>
+            selectSshPrivateKey?: () => Promise<string>
+            selectSftpUploadFile?: () => Promise<string>
             selectAlarmSound?: () => Promise<string>
             selectDirectory?: () => Promise<string>
             selectOutputDirectory?: () => Promise<string>
@@ -71,6 +73,30 @@ declare global {
                 querySslCertificate?: (payload: any) => Promise<any>
                 loadDevToolStore?: () => Promise<any>
                 saveDevToolStore?: (payload: any) => Promise<any>
+            }
+            ssh?: {
+                listProfiles?: () => Promise<any>
+                listFolders?: () => Promise<any>
+                saveFolder?: (payload: any) => Promise<any>
+                deleteFolder?: (id: string) => Promise<any>
+                saveProfile?: (payload: any) => Promise<any>
+                deleteProfile?: (id: string) => Promise<any>
+                connect?: (id: string) => Promise<any>
+                disconnect?: (id: string) => Promise<any>
+                listDir?: (payload: any) => Promise<any>
+                upload?: (payload: any) => Promise<any>
+                download?: (payload: any) => Promise<any>
+                mkdir?: (payload: any) => Promise<any>
+                rename?: (payload: any) => Promise<any>
+                delete?: (payload: any) => Promise<any>
+                startTunnel?: (payload: any) => Promise<any>
+                stopTunnel?: (id: string) => Promise<any>
+                listSessions?: () => Promise<any>
+                startShell?: (payload: any) => Promise<any>
+                writeShell?: (payload: any) => Promise<any>
+                resizeShell?: (payload: any) => Promise<any>
+                stopShell?: (payload: any) => Promise<any>
+                onShellData?: (callback: (payload: any) => void) => () => void
             }
             }
     }

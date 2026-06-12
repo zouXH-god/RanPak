@@ -1,8 +1,9 @@
-const { app, BrowserWindow, nativeImage, dialog, ipcMain, shell, screen, globalShortcut } = require('electron');
+const { app, BrowserWindow, nativeImage, dialog, ipcMain, shell, screen, globalShortcut, safeStorage } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const tls = require('tls');
 const { ClickerRuntime } = require('./services/clicker');
+const { SshRuntime } = require('./services/ssh');
 
 let win;
 let apiRuntime;
@@ -13,7 +14,9 @@ let reminderWin;
 let timerDisplayWin;
 let reminderPayload = null;
 let timerDisplayPayload = null;
+const taskFlowWindows = new Map();
 let clickerRuntime;
+let sshRuntime;
 let appQuitting = false;
 let childShortcutSignature = '';
 const registeredChildShortcuts = new Set();
@@ -191,8 +194,16 @@ function timeToolsConfigPath() {
     return path.join(app.getPath('userData'), 'config', 'time-tools.json');
 }
 
+function taskFlowConfigPath() {
+    return path.join(app.getPath('userData'), 'config', 'task-flow-window.json');
+}
+
 function devToolsStorePath() {
     return path.join(app.getPath('userData'), 'config', 'dev-tools.json');
+}
+
+function sshToolsStorePath() {
+    return path.join(app.getPath('userData'), 'config', 'ssh-tools.json');
 }
 
 function normalizeChildComponents(config = {}) {
@@ -1291,6 +1302,355 @@ async function openChildWindow(options = {}) {
     return true;
 }
 
+const DEFAULT_TASK_FLOW_CONFIG = {
+    backgroundColor: 'rgba(15, 23, 42, 0.82)',
+    fontColor: '#f1f5f9',
+    sessions: [],
+};
+
+function readTaskFlowConfig() {
+    try {
+        const raw = fs.readFileSync(taskFlowConfigPath(), 'utf-8');
+        const parsed = JSON.parse(raw) || {};
+        return {
+            ...DEFAULT_TASK_FLOW_CONFIG,
+            ...parsed,
+            sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
+        };
+    } catch {
+        return { ...DEFAULT_TASK_FLOW_CONFIG };
+    }
+}
+
+function writeTaskFlowConfig(nextConfig = {}) {
+    const current = readTaskFlowConfig();
+    const merged = {
+        ...current,
+        ...nextConfig,
+    };
+    if (nextConfig.sessions !== undefined) merged.sessions = nextConfig.sessions;
+    fs.mkdirSync(path.dirname(taskFlowConfigPath()), { recursive: true });
+    fs.writeFileSync(taskFlowConfigPath(), JSON.stringify(merged, null, 2), 'utf-8');
+    return merged;
+}
+
+function saveTaskFlowSessions() {
+    const sessions = [];
+    taskFlowWindows.forEach((entry, sessionId) => {
+        if (entry.win && !entry.win.isDestroyed()) {
+            sessions.push({
+                id: sessionId,
+                flowId: entry.payload?.flowId || '',
+                flowName: entry.payload?.flowName || '',
+                nodes: entry.payload?.nodes || [],
+                currentIndex: entry.payload?.currentIndex ?? 0,
+                bounds: entry.win.getBounds(),
+            });
+        }
+    });
+    writeTaskFlowConfig({ sessions });
+}
+
+function createTaskFlowSessionId() {
+    return `tf-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+async function openTaskFlowWindow(payload = {}) {
+    const config = readTaskFlowConfig();
+    const sessionId = payload._sessionId || createTaskFlowSessionId();
+    const sessionPayload = {
+        ...payload,
+        _sessionId: sessionId,
+        backgroundColor: config.backgroundColor,
+        fontColor: config.fontColor,
+    };
+
+    const bounds = ensureBoundsInDisplay(payload._bounds || { width: 480, height: 360 });
+    const newWin = new BrowserWindow({
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        icon: getAppIcon(),
+        frame: false,
+        transparent: true,
+        backgroundColor: '#00000000',
+        show: false,
+        hasShadow: false,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        resizable: true,
+        title: "任务流",
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            devTools: true,
+        },
+    });
+
+    taskFlowWindows.set(sessionId, { win: newWin, payload: sessionPayload });
+
+    newWin.loadURL(buildRendererUrl('/task-flow-overlay'));
+    newWin.once('ready-to-show', () => {
+        newWin.webContents.send('task-flow:options', sessionPayload);
+        newWin.show();
+    });
+    const saveBoundsDebounced = () => {
+        if (newWin.isDestroyed()) return;
+        const entry = taskFlowWindows.get(sessionId);
+        if (entry) entry.bounds = newWin.getBounds();
+        saveTaskFlowSessions();
+    };
+    newWin.on('move', saveBoundsDebounced);
+    newWin.on('resize', saveBoundsDebounced);
+    newWin.on('closed', () => {
+        taskFlowWindows.delete(sessionId);
+        saveTaskFlowSessions();
+    });
+    saveTaskFlowSessions();
+    return sessionId;
+}
+
+function closeTaskFlowWindow(sessionId) {
+    if (sessionId) {
+        const entry = taskFlowWindows.get(sessionId);
+        if (entry?.win && !entry.win.isDestroyed()) {
+            entry.win.close();
+            return true;
+        }
+        return false;
+    }
+    taskFlowWindows.forEach((entry) => {
+        if (entry.win && !entry.win.isDestroyed()) entry.win.close();
+    });
+    return true;
+}
+
+function restoreTaskFlowWindows() {
+    const config = readTaskFlowConfig();
+    if (!config.sessions || config.sessions.length === 0) return;
+    config.sessions.forEach((session) => {
+        if (!session.nodes || session.nodes.length === 0) return;
+        openTaskFlowWindow({
+            _sessionId: session.id,
+            _bounds: session.bounds,
+            flowId: session.flowId || '',
+            flowName: session.flowName,
+            nodes: session.nodes,
+            currentIndex: session.currentIndex || 0,
+        });
+    });
+}
+
+ipcMain.handle('task-flow:open', async (_event, payload = {}) => openTaskFlowWindow(payload));
+ipcMain.handle('task-flow:close', async (event, sessionId) => {
+    if (sessionId) return closeTaskFlowWindow(sessionId);
+    const currentWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!currentWindow) return false;
+    for (const [id, entry] of taskFlowWindows) {
+        if (entry.win && entry.win.id === currentWindow.id) {
+            return closeTaskFlowWindow(id);
+        }
+    }
+    return false;
+});
+ipcMain.handle('task-flow:get-options', async (event) => {
+    const currentWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!currentWindow) return null;
+    for (const [, entry] of taskFlowWindows) {
+        if (entry.win && entry.win.id === currentWindow.id) return entry.payload;
+    }
+    return null;
+});
+ipcMain.handle('task-flow:get-config', async () => readTaskFlowConfig());
+ipcMain.handle('task-flow:update-config', async (_event, options = {}) => {
+    const config = writeTaskFlowConfig({ backgroundColor: options.backgroundColor, fontColor: options.fontColor });
+    taskFlowWindows.forEach((entry) => {
+        if (entry.win && !entry.win.isDestroyed()) {
+            entry.payload = { ...entry.payload, backgroundColor: config.backgroundColor, fontColor: config.fontColor };
+            entry.win.webContents.send('task-flow:options', entry.payload);
+        }
+    });
+    return config;
+});
+ipcMain.handle('task-flow:update-session', async (event, payload = {}) => {
+    const currentWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!currentWindow) return false;
+    for (const [, entry] of taskFlowWindows) {
+        if (entry.win && entry.win.id === currentWindow.id) {
+            if (typeof payload.currentIndex === 'number') entry.payload.currentIndex = payload.currentIndex;
+            saveTaskFlowSessions();
+            return true;
+        }
+    }
+    return false;
+});
+ipcMain.handle('task-flow:sync-nodes', async (_event, payload = {}) => {
+    const { flowId, flowName, nodes } = payload;
+    if (!flowId) return false;
+    taskFlowWindows.forEach((entry) => {
+        if (entry.payload?.flowId === flowId && entry.win && !entry.win.isDestroyed()) {
+            entry.payload.flowName = flowName ?? entry.payload.flowName;
+            entry.payload.nodes = nodes ?? entry.payload.nodes;
+            if (entry.payload.currentIndex >= (nodes || []).length) {
+                entry.payload.currentIndex = Math.max(0, (nodes || []).length - 1);
+            }
+            entry.win.webContents.send('task-flow:options', entry.payload);
+        }
+    });
+    saveTaskFlowSessions();
+    return true;
+});
+ipcMain.handle('task-flow:event', async (_event, payload = {}) => {
+    BrowserWindow.getAllWindows().forEach((targetWindow) => {
+        if (!targetWindow.isDestroyed()) targetWindow.webContents.send('task-flow:event', payload);
+    });
+    return true;
+});
+
+ipcMain.handle('task-flow:export', async (_event, payload = {}) => {
+    const { flow, format } = payload;
+    if (!flow || !format) return { ok: false, error: '参数缺失' };
+    const filters = {
+        txt: [{ name: '文本文件', extensions: ['txt'] }],
+        md: [{ name: 'Markdown', extensions: ['md'] }],
+        docx: [{ name: 'Word 文档', extensions: ['docx'] }],
+    };
+    const result = await dialog.showSaveDialog(win, {
+        title: '导出任务流',
+        defaultPath: `${flow.name || '任务流'}.${format}`,
+        filters: filters[format] || filters.txt,
+    });
+    if (result.canceled || !result.filePath) return { ok: false, error: '已取消' };
+    try {
+        if (format === 'txt') {
+            const lines = [`任务流: ${flow.name || '未命名'}\n`];
+            (flow.nodes || []).forEach((node, i) => {
+                lines.push(`[${i + 1}] ${node.name || '未命名节点'}`);
+                if (node.description) lines.push(node.description);
+                lines.push('');
+            });
+            fs.writeFileSync(result.filePath, lines.join('\n'), 'utf-8');
+        } else if (format === 'md') {
+            const lines = [`# ${flow.name || '未命名'}\n`];
+            (flow.nodes || []).forEach((node, i) => {
+                lines.push(`## ${i + 1}. ${node.name || '未命名节点'}\n`);
+                if (node.description) lines.push(`${node.description}\n`);
+            });
+            fs.writeFileSync(result.filePath, lines.join('\n'), 'utf-8');
+        } else if (format === 'docx') {
+            const { Document, Packer, Paragraph, TextRun, HeadingLevel } = require('docx');
+            const children = [
+                new Paragraph({ text: flow.name || '未命名', heading: HeadingLevel.HEADING_1 }),
+                new Paragraph({ text: '' }),
+            ];
+            (flow.nodes || []).forEach((node, i) => {
+                children.push(new Paragraph({
+                    text: `${i + 1}. ${node.name || '未命名节点'}`,
+                    heading: HeadingLevel.HEADING_2,
+                }));
+                if (node.description) {
+                    node.description.split('\n').forEach((line) => {
+                        children.push(new Paragraph({ children: [new TextRun(line)] }));
+                    });
+                }
+                children.push(new Paragraph({ text: '' }));
+            });
+            const doc = new Document({ sections: [{ children }] });
+            const buffer = await Packer.toBuffer(doc);
+            fs.writeFileSync(result.filePath, buffer);
+        }
+        return { ok: true, filePath: result.filePath };
+    } catch (error) {
+        return { ok: false, error: error?.message || '导出失败' };
+    }
+});
+
+ipcMain.handle('task-flow:import', async (_event, payload = {}) => {
+    const { format } = payload || {};
+    const filters = {
+        txt: [{ name: '文本文件', extensions: ['txt'] }],
+        md: [{ name: 'Markdown', extensions: ['md'] }],
+        docx: [{ name: 'Word 文档', extensions: ['docx'] }],
+        all: [
+            { name: '支持的格式', extensions: ['txt', 'md', 'docx'] },
+            { name: '全部文件', extensions: ['*'] },
+        ],
+    };
+    const result = await dialog.showOpenDialog(win, {
+        title: '导入任务流',
+        properties: ['openFile'],
+        filters: filters[format] || filters.all,
+    });
+    if (result.canceled || !result.filePaths[0]) return { ok: false, error: '已取消' };
+    const filePath = result.filePaths[0];
+    const ext = path.extname(filePath).toLowerCase();
+    try {
+        let flowName = '';
+        let nodes = [];
+        if (ext === '.txt') {
+            const content = fs.readFileSync(filePath, 'utf-8');
+            const lines = content.split('\n');
+            const titleMatch = lines[0]?.match(/^任务流[:：]\s*(.+)/);
+            flowName = titleMatch ? titleMatch[1].trim() : path.basename(filePath, ext);
+            let currentNode = null;
+            for (let i = titleMatch ? 1 : 0; i < lines.length; i++) {
+                const line = lines[i];
+                const nodeMatch = line.match(/^\[(\d+)\]\s*(.+)/);
+                if (nodeMatch) {
+                    if (currentNode) nodes.push(currentNode);
+                    currentNode = { name: nodeMatch[2].trim(), description: '' };
+                } else if (currentNode && line.trim()) {
+                    currentNode.description += (currentNode.description ? '\n' : '') + line;
+                }
+            }
+            if (currentNode) nodes.push(currentNode);
+        } else if (ext === '.md') {
+            const content = fs.readFileSync(filePath, 'utf-8');
+            const lines = content.split('\n');
+            const titleMatch = lines[0]?.match(/^#\s+(.+)/);
+            flowName = titleMatch ? titleMatch[1].trim() : path.basename(filePath, ext);
+            let currentNode = null;
+            for (let i = titleMatch ? 1 : 0; i < lines.length; i++) {
+                const line = lines[i];
+                const nodeMatch = line.match(/^##\s+(?:\d+\.\s*)?(.+)/);
+                if (nodeMatch) {
+                    if (currentNode) nodes.push(currentNode);
+                    currentNode = { name: nodeMatch[1].trim(), description: '' };
+                } else if (currentNode && line.trim()) {
+                    currentNode.description += (currentNode.description ? '\n' : '') + line;
+                }
+            }
+            if (currentNode) nodes.push(currentNode);
+        } else if (ext === '.docx') {
+            const mammoth = require('mammoth');
+            const mdResult = await mammoth.convertToMarkdown({ path: filePath });
+            const content = mdResult.value || '';
+            const lines = content.split('\n');
+            const titleMatch = lines[0]?.match(/^#\s+(.+)/);
+            flowName = titleMatch ? titleMatch[1].trim() : path.basename(filePath, ext);
+            let currentNode = null;
+            for (let i = titleMatch ? 1 : 0; i < lines.length; i++) {
+                const line = lines[i];
+                const nodeMatch = line.match(/^##\s+(?:\d+\.\s*)?(.+)/);
+                if (nodeMatch) {
+                    if (currentNode) nodes.push(currentNode);
+                    currentNode = { name: nodeMatch[1].trim(), description: '' };
+                } else if (currentNode && line.trim()) {
+                    currentNode.description += (currentNode.description ? '\n' : '') + line;
+                }
+            }
+            if (currentNode) nodes.push(currentNode);
+        } else {
+            return { ok: false, error: '不支持的文件格式' };
+        }
+        return { ok: true, data: { name: flowName, nodes } };
+    } catch (error) {
+        return { ok: false, error: error?.message || '导入失败' };
+    }
+});
+
 ipcMain.handle('dialog:select-image-files', async () => {
     const result = await dialog.showOpenDialog(win, {
         title: '选择批处理图片',
@@ -1313,6 +1673,29 @@ ipcMain.handle('dialog:select-video-files', async () => {
         ],
     });
     return result.canceled ? [] : result.filePaths;
+});
+
+ipcMain.handle('dialog:select-ssh-private-key', async () => {
+    const result = await dialog.showOpenDialog(win, {
+        title: '选择 SSH 私钥文件',
+        properties: ['openFile'],
+        filters: [
+            { name: '私钥文件', extensions: ['pem', 'key', 'ppk', '*'] },
+            { name: '全部文件', extensions: ['*'] },
+        ],
+    });
+    return result.canceled ? '' : (result.filePaths[0] || '');
+});
+
+ipcMain.handle('dialog:select-sftp-upload-file', async () => {
+    const result = await dialog.showOpenDialog(win, {
+        title: '选择要上传的文件',
+        properties: ['openFile'],
+        filters: [
+            { name: '全部文件', extensions: ['*'] },
+        ],
+    });
+    return result.canceled ? '' : (result.filePaths[0] || '');
 });
 
 ipcMain.handle('dialog:select-alarm-sound', async () => {
@@ -1504,6 +1887,13 @@ ipcMain.handle('window:close-current', (event) => {
     if (currentWindow && timerDisplayWin && currentWindow.id === timerDisplayWin.id) {
         timerDisplayWin = null;
     }
+    for (const [id, entry] of taskFlowWindows) {
+        if (currentWindow && entry.win && currentWindow.id === entry.win.id) {
+            taskFlowWindows.delete(id);
+            saveTaskFlowSessions();
+            break;
+        }
+    }
     currentWindow?.close();
     return true;
 });
@@ -1590,6 +1980,66 @@ ipcMain.handle('dev-tools:ssl-certificate', async (_event, payload = {}) => quer
 ipcMain.handle('dev-tools:load-store', async () => readDevToolStore());
 ipcMain.handle('dev-tools:save-store', async (_event, payload = {}) => writeDevToolStore(payload));
 
+function getSshRuntime() {
+    if (!sshRuntime) {
+        sshRuntime = new SshRuntime({
+            configPath: sshToolsStorePath(),
+            safeStorage,
+            onShellData: (payload) => {
+                BrowserWindow.getAllWindows().forEach((targetWindow) => {
+                    if (!targetWindow.isDestroyed()) targetWindow.webContents.send('ssh:shell-data', payload);
+                });
+            },
+            onTransferProgress: (payload) => {
+                BrowserWindow.getAllWindows().forEach((targetWindow) => {
+                    if (!targetWindow.isDestroyed()) targetWindow.webContents.send('ssh:transfer-progress', payload);
+                });
+            },
+        });
+    }
+    return sshRuntime;
+}
+
+async function safeSshCall(handler) {
+    try {
+        return { ok: true, data: await handler() };
+    } catch (error) {
+        return { ok: false, error: error?.message || 'SSH 操作失败' };
+    }
+}
+
+ipcMain.handle('ssh:list-profiles', async () => safeSshCall(() => getSshRuntime().listProfiles()));
+ipcMain.handle('ssh:list-folders', async () => safeSshCall(() => getSshRuntime().listFolders()));
+ipcMain.handle('ssh:save-folder', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().saveFolder(payload)));
+ipcMain.handle('ssh:delete-folder', async (_event, id = '') => safeSshCall(() => getSshRuntime().deleteFolder(id)));
+ipcMain.handle('ssh:move-node', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().moveNode(payload)));
+ipcMain.handle('ssh:save-profile', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().saveProfile(payload)));
+ipcMain.handle('ssh:delete-profile', async (_event, id = '') => safeSshCall(() => getSshRuntime().deleteProfile(id)));
+ipcMain.handle('ssh:connect', async (_event, id = '') => safeSshCall(() => getSshRuntime().connect(id)));
+ipcMain.handle('ssh:disconnect', async (_event, id = '') => safeSshCall(() => getSshRuntime().disconnect(id)));
+ipcMain.handle('ssh:list-dir', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().listDir(payload)));
+ipcMain.handle('ssh:upload', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().upload(payload)));
+ipcMain.handle('ssh:download', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().download(payload)));
+ipcMain.handle('ssh:download-temp', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().downloadToTemp(payload)));
+ipcMain.handle('ssh:start-drag', async (event, filePath) => {
+    if (!filePath || !fs.existsSync(filePath)) return { ok: false, error: '文件不存在' };
+    event.sender.startDrag({
+        file: filePath,
+        icon: nativeImage.createFromPath(path.join(__dirname, 'assets', 'icons', 'icon.png')),
+    });
+    return { ok: true };
+});
+ipcMain.handle('ssh:mkdir', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().mkdir(payload)));
+ipcMain.handle('ssh:rename', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().rename(payload)));
+ipcMain.handle('ssh:delete', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().deletePath(payload)));
+ipcMain.handle('ssh:tunnel-start', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().startTunnel(payload)));
+ipcMain.handle('ssh:tunnel-stop', async (_event, id = '') => safeSshCall(() => getSshRuntime().stopTunnel(id)));
+ipcMain.handle('ssh:list-sessions', async () => safeSshCall(() => getSshRuntime().listSessions()));
+ipcMain.handle('ssh:shell-start', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().startShell(payload)));
+ipcMain.handle('ssh:shell-write', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().writeShell(payload)));
+ipcMain.handle('ssh:shell-resize', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().resizeShell(payload)));
+ipcMain.handle('ssh:shell-stop', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().stopShell(payload)));
+
 function getClickerRuntime() {
     if (!clickerRuntime) {
         clickerRuntime = new ClickerRuntime({ userDataPath: app.getPath('userData') });
@@ -1615,6 +2065,16 @@ ipcMain.handle('clicker:save-profile', async (_event, profile) => getClickerRunt
 ipcMain.handle('clicker:load-profiles', async () => getClickerRuntime().loadProfiles());
 ipcMain.handle('clicker:delete-profile', async (_event, id) => getClickerRuntime().deleteProfile(id));
 ipcMain.handle('clicker:apply-profile', async (_event, profile) => getClickerRuntime().applyProfile(profile));
+
+ipcMain.handle('app:get-auto-launch', () => {
+    const settings = app.getLoginItemSettings();
+    return settings.openAtLogin;
+});
+
+ipcMain.handle('app:set-auto-launch', (_event, enabled) => {
+    app.setLoginItemSettings({ openAtLogin: Boolean(enabled) });
+    return true;
+});
 
 ipcMain.handle('window:minimize', () => {
     win?.minimize();
@@ -1703,6 +2163,7 @@ app.whenReady().then(async () => {
             bounds: live2dConfig.visible ? live2dConfig.bounds : clockConfig.bounds,
         }), 500);
     }
+    setTimeout(() => restoreTaskFlowWindows(), 800);
     screen.on('display-metrics-changed', keepChildWindowsOnScreen);
     screen.on('display-removed', keepChildWindowsOnScreen);
     screen.on('display-added', keepChildWindowsOnScreen);
@@ -1734,11 +2195,18 @@ app.on('before-quit', () => {
     if (timerDisplayWin && !timerDisplayWin.isDestroyed()) {
         timerDisplayWin.close();
     }
+    saveTaskFlowSessions();
+    taskFlowWindows.forEach((entry) => {
+        if (entry.win && !entry.win.isDestroyed()) entry.win.close();
+    });
     if (apiRuntime?.server) {
         apiRuntime.server.close();
     }
     if (clickerRuntime) {
         clickerRuntime.dispose();
+    }
+    if (sshRuntime) {
+        sshRuntime.dispose();
     }
     unregisterChildShortcuts();
     screen.removeListener('display-metrics-changed', keepChildWindowsOnScreen);

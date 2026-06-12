@@ -2,13 +2,16 @@
  * Electron 预加载脚本
  * 通过 contextBridge 安全地向渲染进程暴露有限的 API
  */
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 contextBridge.exposeInMainWorld('electronAPI', {
     platform: process.platform,
+    getPathForFile: (file) => webUtils.getPathForFile(file),
     apiBaseUrl: process.env.RAN_PAK_API_BASE_URL || 'http://127.0.0.1:8000/api',
     selectImageFiles: () => ipcRenderer.invoke('dialog:select-image-files'),
     selectVideoFiles: () => ipcRenderer.invoke('dialog:select-video-files'),
+    selectSshPrivateKey: () => ipcRenderer.invoke('dialog:select-ssh-private-key'),
+    selectSftpUploadFile: () => ipcRenderer.invoke('dialog:select-sftp-upload-file'),
     selectAlarmSound: () => ipcRenderer.invoke('dialog:select-alarm-sound'),
     selectDirectory: () => ipcRenderer.invoke('dialog:select-directory'),
     selectOutputDirectory: () => ipcRenderer.invoke('dialog:select-directory'),
@@ -90,6 +93,64 @@ contextBridge.exposeInMainWorld('electronAPI', {
         loadDevToolStore: () => ipcRenderer.invoke('dev-tools:load-store'),
         saveDevToolStore: (payload) => ipcRenderer.invoke('dev-tools:save-store', payload),
     },
+    ssh: {
+        listProfiles: () => ipcRenderer.invoke('ssh:list-profiles'),
+        listFolders: () => ipcRenderer.invoke('ssh:list-folders'),
+        saveFolder: (payload) => ipcRenderer.invoke('ssh:save-folder', payload),
+        deleteFolder: (id) => ipcRenderer.invoke('ssh:delete-folder', id),
+        moveNode: (payload) => ipcRenderer.invoke('ssh:move-node', payload),
+        saveProfile: (payload) => ipcRenderer.invoke('ssh:save-profile', payload),
+        deleteProfile: (id) => ipcRenderer.invoke('ssh:delete-profile', id),
+        connect: (id) => ipcRenderer.invoke('ssh:connect', id),
+        disconnect: (id) => ipcRenderer.invoke('ssh:disconnect', id),
+        listDir: (payload) => ipcRenderer.invoke('ssh:list-dir', payload),
+        upload: (payload) => ipcRenderer.invoke('ssh:upload', payload),
+        download: (payload) => ipcRenderer.invoke('ssh:download', payload),
+        downloadToTemp: (payload) => ipcRenderer.invoke('ssh:download-temp', payload),
+        startDrag: (filePath) => ipcRenderer.invoke('ssh:start-drag', filePath),
+        mkdir: (payload) => ipcRenderer.invoke('ssh:mkdir', payload),
+        rename: (payload) => ipcRenderer.invoke('ssh:rename', payload),
+        delete: (payload) => ipcRenderer.invoke('ssh:delete', payload),
+        startTunnel: (payload) => ipcRenderer.invoke('ssh:tunnel-start', payload),
+        stopTunnel: (id) => ipcRenderer.invoke('ssh:tunnel-stop', id),
+        listSessions: () => ipcRenderer.invoke('ssh:list-sessions'),
+        startShell: (payload) => ipcRenderer.invoke('ssh:shell-start', payload),
+        writeShell: (payload) => ipcRenderer.invoke('ssh:shell-write', payload),
+        resizeShell: (payload) => ipcRenderer.invoke('ssh:shell-resize', payload),
+        stopShell: (payload) => ipcRenderer.invoke('ssh:shell-stop', payload),
+        onShellData: (callback) => {
+            const listener = (_event, payload) => callback(payload)
+            ipcRenderer.on('ssh:shell-data', listener)
+            return () => ipcRenderer.removeListener('ssh:shell-data', listener)
+        },
+        onTransferProgress: (callback) => {
+            const listener = (_event, payload) => callback(payload)
+            ipcRenderer.on('ssh:transfer-progress', listener)
+            return () => ipcRenderer.removeListener('ssh:transfer-progress', listener)
+        },
+    },
+    openTaskFlowWindow: (payload) => ipcRenderer.invoke('task-flow:open', payload),
+    closeTaskFlowWindow: (sessionId) => ipcRenderer.invoke('task-flow:close', sessionId),
+    getTaskFlowOptions: () => ipcRenderer.invoke('task-flow:get-options'),
+    getTaskFlowConfig: () => ipcRenderer.invoke('task-flow:get-config'),
+    updateTaskFlowConfig: (options) => ipcRenderer.invoke('task-flow:update-config', options),
+    updateTaskFlowSession: (payload) => ipcRenderer.invoke('task-flow:update-session', payload),
+    syncTaskFlowNodes: (payload) => ipcRenderer.invoke('task-flow:sync-nodes', payload),
+    exportTaskFlow: (payload) => ipcRenderer.invoke('task-flow:export', payload),
+    importTaskFlow: (payload) => ipcRenderer.invoke('task-flow:import', payload),
+    onTaskFlowOptions: (callback) => {
+        const listener = (_event, options) => callback(options)
+        ipcRenderer.on('task-flow:options', listener)
+        return () => ipcRenderer.removeListener('task-flow:options', listener)
+    },
+    sendTaskFlowEvent: (payload) => ipcRenderer.invoke('task-flow:event', payload),
+    onTaskFlowEvent: (callback) => {
+        const listener = (_event, payload) => callback(payload)
+        ipcRenderer.on('task-flow:event', listener)
+        return () => ipcRenderer.removeListener('task-flow:event', listener)
+    },
+    getAutoLaunch: () => ipcRenderer.invoke('app:get-auto-launch'),
+    setAutoLaunch: (enabled) => ipcRenderer.invoke('app:set-auto-launch', enabled),
     minimizeWindow: () => ipcRenderer.invoke('window:minimize'),
     toggleMaximizeWindow: () => ipcRenderer.invoke('window:toggle-maximize'),
     closeWindow: () => ipcRenderer.invoke('window:close'),
