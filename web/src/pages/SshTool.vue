@@ -24,13 +24,13 @@
       <section v-if="connectedProfiles.length === 0" class="rounded-2xl border border-gray-100 bg-white p-6 shadow-soft">
         <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 class="text-xl font-semibold text-gray-900">SSH 连接历史</h1>
-            <p class="mt-1 text-sm text-gray-500">选择已保存的服务器快速连接，或点击上方 + 管理连接。</p>
+            <h1 class="text-xl font-semibold text-gray-900">SSH 配置列表</h1>
+            <p class="mt-1 text-sm text-gray-500">最近连接优先显示，也可从全部已保存配置中快速连接。</p>
           </div>
           <el-button :icon="Plus" type="primary" @click="openConnectionDialog">新增连接</el-button>
         </div>
         <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          <button v-for="profile in historyProfiles" :key="profile.id" class="history-card" @click="quickConnect(profile.id)">
+          <button v-for="profile in availableProfiles" :key="profile.id" class="history-card" @click="quickConnect(profile.id)">
             <span class="profile-card-head">
               <span class="server-mark"></span>
               <span class="min-w-0">
@@ -43,7 +43,7 @@
             <span class="profile-meta">更新于 {{ formatDate(profile.updatedAt) }}</span>
           </button>
         </div>
-        <el-empty v-if="historyProfiles.length === 0" description="暂无连接历史，点击上方 + 新增并连接服务器" />
+        <el-empty v-if="availableProfiles.length === 0" description="暂无 SSH 配置，点击上方新增连接" />
       </section>
 
       <section v-else-if="activeProfile" class="rounded-2xl border border-gray-100 bg-white p-5 shadow-soft">
@@ -1296,6 +1296,13 @@ const historyProfiles = computed(() => {
   return connectionHistory.value
     .map((id) => profiles.value.find((p) => p.id === id))
     .filter(Boolean)
+})
+const availableProfiles = computed(() => {
+  const historyIds = new Set(historyProfiles.value.map((profile) => profile.id))
+  return [
+    ...historyProfiles.value,
+    ...profiles.value.filter((profile) => !historyIds.has(profile.id)),
+  ]
 })
 const activeProfile = computed(() => profiles.value.find((profile) => profile.id === activeConnectionId.value) || null)
 const activeState = computed(() => stateFor(activeConnectionId.value))
