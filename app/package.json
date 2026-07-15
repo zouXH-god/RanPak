@@ -17,13 +17,18 @@
   },
   "dependencies": {
     "@alicloud/alidns20150109": "^4.4.1",
+    "archiver": "^7.0.1",
+    "cheerio": "^1.2.0",
     "cloudflare": "^6.2.0",
     "docx": "^9.7.1",
     "express": "^5.2.1",
+    "extract-zip": "^2.0.1",
+    "jsonpath-plus": "^10.4.0",
     "mammoth": "^1.12.0",
     "multer": "^2.1.1",
     "sharp": "^0.34.5",
     "ssh2": "^1.17.0",
+    "tar": "^7.5.19",
     "tencentcloud-sdk-nodejs": "^4.1.232",
     "yaml": "^2.9.0"
   },
