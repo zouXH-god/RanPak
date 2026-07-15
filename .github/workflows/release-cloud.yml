@@ -82,7 +82,9 @@ jobs:
         id: meta
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          echo "version=${TAG}" >> $GITHUB_OUTPUT
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY}/ranpak-cloud"
+          echo "version=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE,,}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -91,8 +93,8 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/${{ github.repository }}/ranpak-cloud:latest
-            ghcr.io/${{ github.repository }}/ranpak-cloud:${{ steps.meta.outputs.version }}
+            ${{ steps.meta.outputs.image }}:latest
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
 
   release:
     name: Create GitHub Release
