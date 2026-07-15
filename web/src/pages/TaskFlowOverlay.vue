@@ -1,32 +1,54 @@
 <template>
-  <div class="task-flow-overlay" :style="overlayStyle" @wheel.prevent="onWheel">
+  <div class="task-flow-overlay" :style="overlayStyle">
     <div class="drag-bar" />
 
     <div class="overlay-content">
-      <!-- 进度条 -->
-      <div class="progress-track">
-        <template v-for="(node, i) in nodes" :key="i">
-          <div class="progress-dot" :class="{ 'is-active': i === currentIndex, 'is-done': i < currentIndex }" @click="goTo(i)">
-            <span class="dot-inner" />
-            <span class="dot-label">{{ node.name || `步骤 ${i + 1}` }}</span>
-          </div>
-          <div v-if="i < nodes.length - 1" class="progress-line" :class="{ 'is-done': i < currentIndex }" />
+      <!-- 路径面包屑 -->
+      <div v-if="breadcrumb.length" class="breadcrumb">
+        <template v-for="(crumb, i) in breadcrumb" :key="crumb.key">
+          <button class="crumb" :class="{ 'is-current': i === breadcrumb.length - 1 }" @click="goToDepth(crumb.depth)">
+            {{ crumb.name }}
+          </button>
+          <span v-if="i < breadcrumb.length - 1" class="crumb-sep">/</span>
         </template>
       </div>
 
       <!-- 当前节点信息 -->
       <div class="node-content">
-        <h2 class="node-title">{{ currentNode?.name || '未命名节点' }}</h2>
-        <div class="node-description">{{ currentNode?.description || '暂无描述' }}</div>
+        <h2 class="node-title">{{ currentTitle }}</h2>
+        <div
+          v-if="currentContent"
+          ref="contentRef"
+          class="node-description rich"
+          v-html="currentContent"
+          @click="onContentClick"
+        />
+        <div v-else class="node-description empty">暂无内容</div>
+      </div>
+
+      <!-- 子节点选项：多个子节点时才展示选择 -->
+      <div v-if="childOptions.length > 1" class="branch-options">
+        <div class="branch-title">{{ currentNode ? '下一步选择' : '选择起点' }}</div>
+        <div class="branch-buttons">
+          <button
+            v-for="child in childOptions"
+            :key="child.id"
+            class="branch-btn"
+            @click="enterChild(child)"
+          >
+            <span class="branch-btn-name">{{ child.name || '未命名节点' }}</span>
+            <span v-if="child.children && child.children.length" class="branch-btn-count">{{ child.children.length }} 分支</span>
+          </button>
+        </div>
       </div>
     </div>
 
     <!-- 底部操作 -->
     <div class="overlay-footer">
-      <span class="step-indicator">{{ currentIndex + 1 }} / {{ nodes.length }}</span>
-      <button class="btn btn-prev" :disabled="currentIndex === 0" @click="prev">上一步</button>
-      <button v-if="isLastStep" class="btn btn-finish" @click="finish">完成</button>
-      <button v-else class="btn btn-next" @click="next">下一步</button>
+      <span class="step-indicator">{{ depthLabel }}</span>
+      <button class="btn btn-prev" :disabled="!canGoBack" @click="goBack">上一级</button>
+      <button v-if="childOptions.length === 1" class="btn btn-next" @click="enterChild(childOptions[0])">下一步</button>
+      <button v-if="childOptions.length === 0" class="btn btn-finish" @click="finish">完成</button>
     </div>
   </div>
 </template>
@@ -35,29 +57,94 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 
 const nodes = ref([])
-const currentIndex = ref(0)
+const flowName = ref('任务流')
+const pathIds = ref([])
 const backgroundColor = ref('rgba(15, 23, 42, 0.82)')
 const fontColor = ref('#f1f5f9')
+const contentRef = ref(null)
 
-const currentNode = computed(() => nodes.value[currentIndex.value] || null)
-const isLastStep = computed(() => currentIndex.value >= nodes.value.length - 1)
+const baseDepth = computed(() => (nodes.value.length === 1 ? 1 : 0))
+
+const nodeMap = computed(() => {
+  const map = {}
+  const walk = (list) => (list || []).forEach((node) => { map[node.id] = node; walk(node.children) })
+  walk(nodes.value)
+  return map
+})
+
+function effectiveChildren(node) {
+  if (!node) return nodes.value
+  const embedded = node.children || []
+  const linked = (node.linkIds || []).map((id) => nodeMap.value[id]).filter(Boolean)
+  return [...embedded, ...linked]
+}
+
+function nodeByPath(ids) {
+  let list = nodes.value
+  let node = null
+  for (const id of ids) {
+    node = list.find((n) => n.id === id)
+    if (!node) return null
+    list = effectiveChildren(node)
+  }
+  return node
+}
+
+const currentNode = computed(() => (pathIds.value.length ? nodeByPath(pathIds.value) : null))
+const childOptions = computed(() => effectiveChildren(currentNode.value))
+const currentTitle = computed(() => currentNode.value?.name || flowName.value || '任务流')
+const currentContent = computed(() => currentNode.value?.content || '')
+const canGoBack = computed(() => pathIds.value.length > baseDepth.value)
+
+const breadcrumb = computed(() => {
+  const crumbs = [{ key: 'root', name: flowName.value || '任务流', depth: 0 }]
+  let list = nodes.value
+  for (let i = 0; i < pathIds.value.length; i++) {
+    const id = pathIds.value[i]
+    const node = list.find((n) => n.id === id)
+    if (!node) break
+    crumbs.push({ key: node.id, name: node.name || '未命名节点', depth: i + 1 })
+    list = effectiveChildren(node)
+  }
+  if (baseDepth.value === 1) return crumbs.slice(1)
+  return crumbs
+})
+
+const depthLabel = computed(() => `第 ${pathIds.value.length} 层`)
+
 const overlayStyle = computed(() => ({
   background: backgroundColor.value,
   color: fontColor.value,
 }))
 
-const SCALE_STEP = 0.05
-const MIN_SIZE = 240
-const MAX_SIZE = 1600
-
 let unsubscribe = null
+
+function defaultPath() {
+  return nodes.value.length === 1 ? [nodes.value[0].id] : []
+}
 
 function applyOptions(options) {
   if (!options) return
   if (options.nodes) nodes.value = options.nodes
-  if (typeof options.currentIndex === 'number') currentIndex.value = options.currentIndex
+  if (options.flowName) flowName.value = options.flowName
   if (options.backgroundColor) backgroundColor.value = options.backgroundColor
   if (options.fontColor) fontColor.value = options.fontColor
+  if (Array.isArray(options.currentPath) && options.currentPath.length) {
+    pathIds.value = options.currentPath
+  }
+  // 校验路径有效性，无效则回退到默认
+  if (!isPathValid(pathIds.value)) pathIds.value = defaultPath()
+}
+
+function isPathValid(ids) {
+  if (ids.length === 0) return baseDepth.value === 0
+  let list = nodes.value
+  for (const id of ids) {
+    const node = list.find((n) => n.id === id)
+    if (!node) return false
+    list = effectiveChildren(node)
+  }
+  return true
 }
 
 function onKeyDown(e) {
@@ -83,42 +170,49 @@ onBeforeUnmount(() => {
 })
 
 function syncSession() {
-  window.electronAPI?.updateTaskFlowSession?.({ currentIndex: currentIndex.value })
+  window.electronAPI?.updateTaskFlowSession?.({ currentPath: pathIds.value })
 }
 
-function prev() {
-  if (currentIndex.value > 0) {
-    currentIndex.value--
-    syncSession()
+function enterChild(child) {
+  pathIds.value = [...pathIds.value, child.id]
+  syncSession()
+}
+
+function goBack() {
+  if (!canGoBack.value) return
+  pathIds.value = pathIds.value.slice(0, -1)
+  syncSession()
+}
+
+function goToDepth(depth) {
+  if (depth < baseDepth.value) return
+  pathIds.value = pathIds.value.slice(0, depth)
+  syncSession()
+}
+
+async function onContentClick(event) {
+  const target = event.target
+  const anchor = target?.closest?.('a')
+  if (anchor) {
+    event.preventDefault()
+    const filePath = anchor.getAttribute('data-file')
+    if (filePath) {
+      await window.electronAPI?.openPath?.(filePath)
+    } else {
+      const href = anchor.getAttribute('href')
+      if (href) window.electronAPI?.openExternal?.(href)
+    }
+    return
   }
-}
-
-function next() {
-  if (currentIndex.value < nodes.value.length - 1) {
-    currentIndex.value++
-    syncSession()
-  }
-}
-
-function goTo(index) {
-  if (index >= 0 && index < nodes.value.length) {
-    currentIndex.value = index
-    syncSession()
+  if (target && target.tagName === 'IMG') {
+    const src = target.currentSrc || target.src
+    if (src) window.electronAPI?.openImageViewer?.({ src, name: currentTitle.value })
   }
 }
 
 function finish() {
   window.electronAPI?.sendTaskFlowEvent?.({ action: 'done' })
   window.electronAPI?.closeCurrentWindow?.()
-}
-
-function onWheel(e) {
-  const factor = e.deltaY > 0 ? (1 - SCALE_STEP) : (1 + SCALE_STEP)
-  const curW = window.outerWidth
-  const curH = window.outerHeight
-  const w = Math.round(Math.min(MAX_SIZE, Math.max(MIN_SIZE, curW * factor)))
-  const h = Math.round(Math.min(MAX_SIZE, Math.max(MIN_SIZE, curH * factor)))
-  window.resizeTo(w, h)
 }
 </script>
 
@@ -152,78 +246,27 @@ function onWheel(e) {
   overflow-y: auto;
 }
 
-.progress-track {
+.breadcrumb {
   display: flex;
   align-items: center;
-  gap: 0;
+  flex-wrap: wrap;
+  gap: 4px;
   padding: 2px 0 4px;
-  overflow-x: auto;
   flex-shrink: 0;
 }
-
-.progress-dot {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  flex-shrink: 0;
+.crumb {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  font-size: 11px;
+  color: rgba(148, 163, 184, 0.85);
   cursor: pointer;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
 }
-.progress-dot:hover .dot-inner {
-  border-color: #60a5fa;
-  transform: scale(1.15);
-}
-
-.dot-inner {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: rgba(148, 163, 184, 0.4);
-  border: 2px solid rgba(148, 163, 184, 0.6);
-  transition: all 0.25s ease;
-}
-
-.progress-dot.is-active .dot-inner {
-  background: #3b82f6;
-  border-color: #60a5fa;
-  box-shadow: 0 0 12px rgba(59, 130, 246, 0.5);
-  transform: scale(1.2);
-}
-
-.progress-dot.is-done .dot-inner {
-  background: #22c55e;
-  border-color: #4ade80;
-}
-
-.dot-label {
-  font-size: 10px;
-  color: rgba(148, 163, 184, 0.7);
-  max-width: 64px;
-  text-align: center;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.progress-dot.is-active .dot-label {
-  color: #93c5fd;
-  font-weight: 600;
-}
-
-.progress-line {
-  flex: 1;
-  min-width: 16px;
-  height: 2px;
-  background: rgba(148, 163, 184, 0.3);
-  margin: 0 3px;
-  margin-bottom: 16px;
-  border-radius: 1px;
-  transition: background 0.25s ease;
-}
-
-.progress-line.is-done {
-  background: #4ade80;
-}
+.crumb:hover { color: #93c5fd; background: rgba(148, 163, 184, 0.12); }
+.crumb.is-current { color: #93c5fd; font-weight: 600; }
+.crumb-sep { font-size: 11px; color: rgba(148, 163, 184, 0.5); }
 
 .node-content {
   flex: 1;
@@ -242,9 +285,89 @@ function onWheel(e) {
   font-size: 14px;
   line-height: 1.7;
   color: inherit;
-  opacity: 0.85;
-  white-space: pre-wrap;
+  opacity: 0.9;
   word-break: break-word;
+}
+.node-description.empty { opacity: 0.5; }
+.node-description.rich :deep(img) {
+  display: inline-block;
+  max-width: 100%;
+  max-height: 100px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  vertical-align: middle;
+  border-radius: 6px;
+  margin: 2px 4px;
+  cursor: zoom-in;
+  transition: transform 0.15s;
+}
+.node-description.rich :deep(img:hover) {
+  transform: scale(1.01);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.node-description.rich :deep(b),
+.node-description.rich :deep(strong) { font-weight: 700; }
+.node-description.rich :deep(a) {
+  color: #60a5fa;
+  text-decoration: underline;
+  cursor: pointer;
+  word-break: break-all;
+}
+.node-description.rich :deep(a.rte-file-link) {
+  text-decoration: none;
+  padding: 1px 8px 1px 6px;
+  border-radius: 6px;
+  background: rgba(96, 165, 250, 0.16);
+  border: 1px solid rgba(96, 165, 250, 0.4);
+}
+.node-description.rich :deep(a.rte-file-link)::before {
+  content: "\1F4CE";
+  margin-right: 4px;
+}
+
+.branch-options {
+  flex-shrink: 0;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.branch-title {
+  font-size: 11px;
+  opacity: 0.55;
+  margin-bottom: 8px;
+}
+.branch-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.branch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.12);
+  color: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.branch-btn:hover {
+  background: #3b82f6;
+  border-color: #60a5fa;
+  color: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.3);
+}
+.branch-btn-count {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.18);
+  opacity: 0.85;
 }
 
 .overlay-footer {

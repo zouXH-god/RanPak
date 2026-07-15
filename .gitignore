@@ -1,5 +1,6 @@
 node_modules/
 release/
+release-cloud/
 web/dist/
 app/web-dist/
 app/temp/
@@ -10,6 +11,11 @@ app/assets/live2d/
 web/.idea/
 app/.idea/
 app/config/dns.yaml
+app/config/cloud-sync.json
+app/config/tools.json
+cloud/data/
+cloud/ranpak-cloud
+cloud/ranpak-cloud.exe
 
 # Live2D data packages are external runtime assets.
 web/public/vendor/live2d-widget/covers/

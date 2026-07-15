@@ -162,14 +162,43 @@
 
     <SourceCredit :sources="sources" />
 
-    <el-dialog v-model="cropDialogVisible" title="裁剪图片" width="720px" :close-on-click-modal="false">
+    <el-dialog v-model="cropDialogVisible" title="裁剪图片" width="800px" :close-on-click-modal="false">
+      <div class="flex items-center flex-wrap gap-x-4 gap-y-2 mb-3 rounded-md bg-gray-50 px-3 py-2.5">
+        <el-checkbox v-model="expandEnabled">扩图</el-checkbox>
+        <template v-if="expandEnabled">
+          <el-checkbox v-model="expandCenterLock">居中裁剪</el-checkbox>
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs text-gray-500 shrink-0">扩展量:</span>
+            <el-slider v-model="expandPercent" :min="0" :max="200" :step="5" class="!w-28" />
+            <span class="text-xs text-gray-500 w-10 text-right">{{ expandPercent }}%</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs text-gray-500 shrink-0">填充色:</span>
+            <el-color-picker v-model="expandColor" size="small" show-alpha />
+            <el-button size="small" link type="primary" @click="pickScreenColor">取色</el-button>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs text-gray-500 shrink-0">比例:</span>
+            <el-select v-model="expandRatio" size="small" class="!w-20" placeholder="自由">
+              <el-option label="自由" value="" />
+              <el-option label="1:1" value="1:1" />
+              <el-option label="4:3" value="4:3" />
+              <el-option label="3:4" value="3:4" />
+              <el-option label="16:9" value="16:9" />
+              <el-option label="9:16" value="9:16" />
+            </el-select>
+          </div>
+        </template>
+      </div>
       <div class="h-[520px]">
         <Cropper
-          v-if="editingTempImage"
+          v-if="cropperSrc"
           ref="cropperRef"
           class="h-full"
-          :src="editingTempImage"
+          :src="cropperSrc"
           :stencil-component="CircleStencil"
+          :default-position="expandCenterLock ? defaultCenterPosition : undefined"
+          :default-size="expandCenterLock ? defaultCenterSize : undefined"
         />
       </div>
       <template #footer>
@@ -246,6 +275,13 @@ const rowIndex = ref(0)
 const colIndex = ref(0)
 const cropDialogVisible = ref(false)
 const editingTempImage = ref('')
+const cropperSrc = ref('')
+const expandEnabled = ref(false)
+const expandPercent = ref(50)
+const expandColor = ref('#FFFFFF')
+const expandRatio = ref('1:1')
+const expandCenterLock = ref(true)
+const origDims = ref({ width: 0, height: 0 })
 const exporting = ref(false)
 const historyRecords = ref([])
 const HISTORY_KEY = 'ran-pak.badge-print.history'
@@ -384,6 +420,11 @@ function onFileChange(event) {
       tempImages.value[rowIndex.value][colIndex.value] = url
       images.value[rowIndex.value][colIndex.value] = url
       editingTempImage.value = url
+      cropperSrc.value = url
+      resetExpandState()
+      const img = new Image()
+      img.onload = () => { origDims.value = { width: img.naturalWidth, height: img.naturalHeight } }
+      img.src = url
       cropDialogVisible.value = true
     }
     reader.readAsDataURL(files[0])
@@ -421,10 +462,25 @@ function fillImagesFromCell(startRow, startCol, urls) {
   }
 }
 
+function resetExpandState() {
+  expandEnabled.value = false
+  expandPercent.value = 50
+  expandColor.value = '#FFFFFF'
+  expandRatio.value = '1:1'
+  expandCenterLock.value = true
+}
+
 function editCrop(i, j) {
   rowIndex.value = i
   colIndex.value = j
   editingTempImage.value = tempImages.value[i][j]
+  cropperSrc.value = editingTempImage.value
+  resetExpandState()
+  if (editingTempImage.value) {
+    const img = new Image()
+    img.onload = () => { origDims.value = { width: img.naturalWidth, height: img.naturalHeight } }
+    img.src = editingTempImage.value
+  }
   cropDialogVisible.value = Boolean(editingTempImage.value)
 }
 
@@ -435,6 +491,89 @@ function confirmCrop() {
   images.value[rowIndex.value][colIndex.value] = canvas.toDataURL()
   cropDialogVisible.value = false
 }
+
+function expandImageCanvas(dataUrl, percent, fillColor, ratio) {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      origDims.value = { width: img.width, height: img.height }
+
+      const base = Math.max(img.width, img.height)
+      const pad = base * (percent / 100)
+      let cw = img.width + pad * 2
+      let ch = img.height + pad * 2
+
+      if (ratio) {
+        const [rw, rh] = ratio.split(':').map(Number)
+        const target = rw / rh
+        if (cw / ch > target) {
+          ch = cw / target
+        } else {
+          cw = ch * target
+        }
+      }
+
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(cw)
+      canvas.height = Math.round(ch)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = fillColor
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(img, (canvas.width - img.width) / 2, (canvas.height - img.height) / 2)
+      resolve(canvas.toDataURL())
+    }
+    img.src = dataUrl
+  })
+}
+
+function defaultCenterSize({ imageSize }) {
+  const ow = origDims.value.width || imageSize.width
+  const oh = origDims.value.height || imageSize.height
+  const size = Math.min(ow, oh)
+  return { width: size, height: size }
+}
+
+function defaultCenterPosition({ imageSize }) {
+  const { width } = defaultCenterSize({ imageSize })
+  return {
+    left: (imageSize.width - width) / 2,
+    top: (imageSize.height - width) / 2,
+  }
+}
+
+async function pickScreenColor() {
+  if (!window.EyeDropper) {
+    ElMessage.warning('当前环境不支持取色器')
+    return
+  }
+  try {
+    const dropper = new window.EyeDropper()
+    const result = await dropper.open()
+    expandColor.value = result.sRGBHex
+  } catch {
+    // user cancelled
+  }
+}
+
+async function applyExpand() {
+  if (!editingTempImage.value) return
+  if (!expandEnabled.value) {
+    cropperSrc.value = editingTempImage.value
+    return
+  }
+  cropperSrc.value = await expandImageCanvas(
+    editingTempImage.value,
+    expandPercent.value,
+    expandColor.value,
+    expandRatio.value,
+  )
+}
+
+let expandTimer = null
+watch([expandEnabled, expandPercent, expandColor, expandRatio, expandCenterLock], () => {
+  clearTimeout(expandTimer)
+  expandTimer = setTimeout(applyExpand, 200)
+})
 
 function copyImage(i, j) {
   copiedImage.value = images.value[i][j]

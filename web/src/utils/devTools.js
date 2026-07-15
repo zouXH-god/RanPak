@@ -4,9 +4,11 @@ const STORE_FALLBACK_KEY = 'ranpak:dev-tools:store'
 
 export function formatBytes(bytes) {
   const size = Math.max(0, Number(bytes || 0))
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  return `${(size / 1024 / 1024).toFixed(1)} MB`
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+  if (size === 0) return '0 B'
+  const i = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1)
+  const value = size / Math.pow(1024, i)
+  return `${i === 0 ? value : value.toFixed(2)} ${units[i]}`
 }
 
 export function formatJson(value) {

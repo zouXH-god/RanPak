@@ -305,7 +305,13 @@ function formatDuration(totalSeconds) {
 }
 
 function closeWindow() {
-  if (state.running) return
+  if (state.running) {
+    state.running = false
+    deadlineAt = 0
+    stopTicking()
+    emitState('pause')
+  }
+  stopAlertSound()
   window.electronAPI?.closeCurrentWindow?.()
 }
 </script>

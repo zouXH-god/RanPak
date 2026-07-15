@@ -58,6 +58,16 @@ if (Test-Path $bundledDist) {
 Copy-Item -LiteralPath $webDist -Destination $bundledDist -Recurse
 Remove-Live2dDataPackages (Join-Path $bundledDist "vendor\live2d-widget")
 
+Write-Host "==> Copying bundled plugins"
+$pluginsDir = Join-Path $root "plugins"
+$bundledPlugins = Join-Path $appDir "bundled-plugins"
+if (Test-Path $bundledPlugins) {
+    Remove-Item -LiteralPath $bundledPlugins -Recurse -Force
+}
+if (Test-Path $pluginsDir) {
+    Copy-Item -LiteralPath $pluginsDir -Destination $bundledPlugins -Recurse
+}
+
 Write-Host "==> Packaging Windows exe"
 if (Test-Path $releaseDir) {
     # Only remove electron-builder artifacts, preserve user files (e.g. Live2D resources)

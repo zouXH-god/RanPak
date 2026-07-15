@@ -1,0 +1,113 @@
+.docker-manager { min-height: 300px; }
+
+.docker-manager .install-log-panel { padding: 8px; }
+
+.docker-manager .install-log {
+  background: #0f172a; color: #e5e7eb; border-radius: 8px; padding: 12px;
+  max-height: 400px; overflow-y: auto; font-family: Consolas, monospace; font-size: 12px;
+}
+.docker-manager .install-log pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
+
+.docker-manager .log-view {
+  background: #0f172a; color: #e5e7eb; border-radius: 8px; padding: 12px;
+  max-height: 450px; overflow-y: auto; font-family: Consolas, monospace; font-size: 12px;
+}
+.docker-manager .log-view pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
+
+.docker-manager .log-viewer-inline { display: flex; flex-direction: column; gap: 8px; }
+.docker-manager .log-toolbar-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.docker-manager .log-content-inline {
+  background: #0f172a; color: #e5e7eb; border-radius: 8px; padding: 12px;
+  max-height: 450px; overflow-y: auto; font-family: Consolas, monospace; font-size: 12px;
+}
+.docker-manager .log-content-inline pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
+
+.docker-manager .compose-editor textarea {
+  font-family: Consolas, "Cascadia Mono", monospace; font-size: 13px; line-height: 1.6;
+}
+.docker-manager .compose-visual-body { max-height: 65vh; overflow-y: auto; }
+.docker-manager .compose-svc-card { border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
+.docker-manager .compose-svc-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 12px; background: #f8fafc; cursor: pointer; user-select: none;
+}
+.docker-manager .compose-svc-head-left { display: flex; align-items: center; }
+.docker-manager .compose-svc-body { padding: 12px 14px 6px; }
+.docker-manager .compose-grid-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.docker-manager .compose-grid-2col .el-form-item { margin-bottom: 12px; }
+.docker-manager .compose-global-collapse { border: none; }
+.docker-manager .compose-global-collapse .el-collapse-item__header { font-size: 13px; font-weight: 500; color: #475569; }
+.docker-manager .compose-yaml-preview {
+  font-family: Consolas, monospace; font-size: 12px; line-height: 1.5;
+  background: #1e293b; color: #e2e8f0; padding: 12px; border-radius: 8px;
+  max-height: 300px; overflow: auto; white-space: pre;
+}
+.docker-manager .file-editor-textarea textarea {
+  font-family: Consolas, "Cascadia Mono", monospace; font-size: 13px; line-height: 1.6;
+}
+
+.docker-manager .run-param-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; width: 100%; }
+.docker-manager .run-preview { background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px; margin-top: 12px; }
+.docker-manager .run-dialog-body { max-height: 65vh; overflow-y: auto; }
+.docker-manager .run-preview-code,
+.docker-manager .pull-preview-code {
+  font-size: 12px; color: #1e293b; word-break: break-all;
+  white-space: pre-wrap; font-family: Consolas, monospace;
+}
+.docker-manager .run-advanced-collapse { border: none; }
+.docker-manager .run-advanced-collapse .el-collapse-item__header { font-size: 13px; font-weight: 500; color: #475569; height: 36px; }
+.docker-manager .run-advanced-collapse .el-collapse-item__content { padding-bottom: 8px; }
+.docker-manager .run-grid-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.docker-manager .run-grid-3col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 12px; }
+.docker-manager .run-grid-2col .el-form-item,
+.docker-manager .run-grid-3col .el-form-item { margin-bottom: 12px; }
+
+.docker-manager .inspect-detail { max-height: 70vh; overflow-y: auto; }
+.docker-manager .inspect-section-title {
+  font-size: 13px; font-weight: 600; color: #334155;
+  margin: 8px 0 6px; padding-left: 6px; border-left: 3px solid #409eff;
+}
+.docker-manager .inspect-value-text { word-break: break-all; font-family: Consolas, monospace; font-size: 12px; }
+
+.docker-manager .docker-terminal-wrapper { background: #0f172a; border-radius: 10px; padding: 10px 12px; }
+.docker-manager .docker-term-host { height: 420px; }
+.docker-manager .docker-term-host .xterm { height: 100%; }
+.docker-manager .docker-term-host .xterm-viewport { overflow-y: auto !important; }
+
+.docker-manager .docker-toolbar { border-top: 1px solid #1e293b; margin-top: 4px; }
+.docker-manager .toolbar-toggle {
+  cursor: pointer; padding: 6px 8px; font-size: 12px;
+  color: #94a3b8; user-select: none; text-align: center;
+}
+.docker-manager .toolbar-toggle:hover { color: #e5e7eb; }
+.docker-manager .toolbar-body { padding: 8px 4px 4px; }
+.docker-manager .toolbar-tabs .el-tabs__header { margin-bottom: 8px; }
+.docker-manager .toolbar-tabs .el-tabs__item { font-size: 12px; color: #94a3b8; padding: 0 12px; height: 28px; line-height: 28px; }
+.docker-manager .toolbar-tabs .el-tabs__item.is-active { color: #60a5fa; }
+.docker-manager .toolbar-tabs .el-tabs__nav-wrap::after { background: #1e293b; }
+.docker-manager .toolbar-tabs .el-tabs__active-bar { background: #60a5fa; }
+.docker-manager .toolbar-section { padding: 4px 4px; }
+
+.docker-manager .preset-tree { max-height: 200px; overflow-y: auto; }
+.docker-manager .preset-node {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px; font-size: 12px; border-bottom: 1px solid #1e293b;
+}
+.docker-manager .preset-group-btn {
+  background: none; border: none; cursor: pointer;
+  display: flex; align-items: center; gap: 4px;
+  color: #e5e7eb; font-size: 12px; padding: 0;
+}
+.docker-manager .preset-cmd-name { font-size: 12px; color: #93c5fd; font-weight: 500; white-space: nowrap; }
+.docker-manager .preset-cmd-text { max-width: 200px; }
+
+.docker-manager .docker-file-wrapper {
+  background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px;
+}
+.docker-manager .file-name-btn {
+  display: flex; align-items: center; gap: 6px;
+  background: none; border: none; cursor: pointer;
+  color: inherit; font-size: inherit; padding: 0;
+}
+.docker-manager .file-name-btn:hover { color: #409eff; }
+.docker-manager .sftp-action-bar { display: flex; gap: 2px; justify-content: center; }

@@ -15,7 +15,10 @@
           </div>
         </el-option>
       </el-select>
-      <el-button type="primary" plain @click="openAccountDialog">添加账号</el-button>
+      <el-button :icon="Refresh" circle @click="refreshAccount" />
+      <el-button :icon="CopyDocument" circle @click="copyAccount" />
+      <el-button :icon="Edit" circle @click="editAccount" />
+      <el-button :icon="Plus" circle type="primary" @click="openAccountDialog" />
     </div>
     <div class="flex">
       <h2 class="text-2xl font-semibold text-brand-ink mb-4 mr-8">解析记录</h2>
@@ -95,10 +98,10 @@
         </div>
       </div>
 
-      <el-dialog v-model="showAccountDialog" title="添加 DNS 账号" width="520px" :close-on-click-modal="false">
+      <el-dialog v-model="showAccountDialog" :title="isEditing ? '编辑 DNS 账号' : '添加 DNS 账号'" width="520px" :close-on-click-modal="false">
         <el-form ref="accountFormRef" :model="accountForm" :rules="accountRules" label-width="132px" label-position="left">
           <el-form-item label="账号名称" prop="name">
-            <el-input v-model="accountForm.name" placeholder="例如：my-aliyun" />
+            <el-input v-model="accountForm.name" :disabled="isEditing" placeholder="例如：my-aliyun" />
           </el-form-item>
           <el-form-item label="服务商" prop="type">
             <el-select v-model="accountForm.type" class="w-full" placeholder="请选择服务商">
@@ -108,11 +111,11 @@
               <el-option label="GoDaddy" value="godaddy" />
             </el-select>
           </el-form-item>
-          <el-form-item label="AccessKey ID" prop="access_key_id">
-            <el-input v-model="accountForm.access_key_id" placeholder="请输入 AccessKey ID" />
+          <el-form-item label="AccessKey ID" :prop="isEditing ? undefined : 'access_key_id'">
+            <el-input v-model="accountForm.access_key_id" :placeholder="isEditing ? '留空则不修改' : '请输入 AccessKey ID'" />
           </el-form-item>
-          <el-form-item label="AccessKey Secret" prop="access_key_secret">
-            <el-input v-model="accountForm.access_key_secret" type="password" show-password placeholder="请输入 AccessKey Secret" />
+          <el-form-item label="AccessKey Secret" :prop="isEditing ? undefined : 'access_key_secret'">
+            <el-input v-model="accountForm.access_key_secret" type="password" show-password :placeholder="isEditing ? '留空则不修改' : '请输入 AccessKey Secret'" />
           </el-form-item>
         </el-form>
         <template #footer>
@@ -142,7 +145,8 @@
   </div>
 </template>
 <script setup>
-import {computed, onMounted, ref} from 'vue'
+import {computed, onBeforeUnmount, onMounted, ref} from 'vue'
+import {Refresh, CopyDocument, Edit, Plus} from '@element-plus/icons-vue'
 import {
   deleteDomainRecord,
   getAccountList,
@@ -160,9 +164,10 @@ const accountType = ref('')
 const accountFormRef = ref()
 const showAccountDialog = ref(false)
 const savingAccount = ref(false)
+const isEditing = ref(false)
 const accountForm = ref({
   name: '',
-  type: 'ali',
+  type: '',
   access_key_id: '',
   access_key_secret: '',
 })
@@ -237,8 +242,17 @@ const putAllDomains = () => {
 }
 
 const accountList = ref([])
+let unsubscribeCloudSync = null
+
 onMounted(() => {
   loadAccountList()
+  unsubscribeCloudSync = window.electronAPI?.cloudSync?.onDataUpdated?.((payload) => {
+    if (payload?.type === 'dns_accounts') loadAccountList()
+  })
+})
+
+onBeforeUnmount(() => {
+  unsubscribeCloudSync?.()
 })
 
 const loadAccountList = async () => {
@@ -251,10 +265,44 @@ const loadAccountList = async () => {
   }))
 }
 
+const refreshAccount = async () => {
+  await loadAccountList()
+  if (account.value) _getDomainList()
+  ElMessage.success('已刷新')
+}
+
+const copyAccount = () => {
+  if (!account.value) {
+    ElMessage.warning('请先选择账号')
+    return
+  }
+  navigator.clipboard.writeText(account.value).then(() => {
+    ElMessage.success('账号名称已复制到剪贴板')
+  })
+}
+
 const openAccountDialog = () => {
+  isEditing.value = false
   accountForm.value = {
     name: '',
-    type: 'ali',
+    type: '',
+    access_key_id: '',
+    access_key_secret: '',
+  }
+  showAccountDialog.value = true
+}
+
+const editAccount = () => {
+  if (!account.value) {
+    ElMessage.warning('请先选择账号')
+    return
+  }
+  const selected = accountList.value.find(item => item.value === account.value)
+  if (!selected) return
+  isEditing.value = true
+  accountForm.value = {
+    name: selected.value,
+    type: selected.type,
     access_key_id: '',
     access_key_secret: '',
   }

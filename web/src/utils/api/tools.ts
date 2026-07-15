@@ -19,3 +19,15 @@ export async function fetchLive2dCatalog() {
 export async function testLive2dCatalog(config: any) {
     return serverRequest("/live2d/catalog/test", "POST", null, config)
 }
+
+export async function fetchFeatureVisibility() {
+    return serverRequest("/tools/feature-visibility")
+}
+
+export async function updateFeatureVisibility(config: { hiddenFeatures: string[] }) {
+    return serverRequest("/tools/feature-visibility", "PUT", null, config)
+}
+
+export async function aiChat(prompt: string) {
+    return serverRequest("/ai/chat", "POST", null, { prompt })
+}

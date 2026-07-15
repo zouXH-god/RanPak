@@ -8,6 +8,7 @@ const { sendError, sendSuccess } = require("./response");
 const { getDnsAccounts, providerByName, buildDomain } = require("./dns");
 const { upsertDnsAccount } = require("./config");
 const files = require("./files");
+const { compressFiles, extractArchive } = require("./files/compress");
 const image = require("./image");
 const video = require("./video");
 const toolsConfig = require("./tools-config");
@@ -91,6 +92,14 @@ function createApiApp() {
         sendSuccess(res, toolsConfig.writeToolsConfig(req.body || {}));
     }));
 
+    app.get("/api/tools/feature-visibility", asyncRoute((_req, res) => {
+        sendSuccess(res, toolsConfig.readFeatureVisibility());
+    }));
+
+    app.put("/api/tools/feature-visibility", asyncRoute((req, res) => {
+        sendSuccess(res, toolsConfig.writeFeatureVisibility(req.body || {}));
+    }));
+
     app.post("/api/tools/ffmpeg/test", asyncRoute(async (req, res) => {
         sendSuccess(res, await video.getCapabilities(req.body || {}));
     }));
@@ -161,6 +170,38 @@ function createApiApp() {
             req.query.new_name,
             String(req.query.only_file ?? "true") !== "false",
         ));
+    }));
+
+    app.post("/api/files/copy", asyncRoute(async (req, res) => {
+        sendSuccess(res, await files.copyFile(req.body.source, req.body.target));
+    }));
+
+    app.post("/api/files/chunked-copy", asyncRoute(async (req, res) => {
+        sendSuccess(res, await files.startChunkedCopy(req.body.source, req.body.target, req.body.chunkSize));
+    }));
+
+    app.post("/api/files/copy-chunk", asyncRoute(async (req, res) => {
+        sendSuccess(res, await files.copyChunk(req.body.taskId, req.body.chunkIndex));
+    }));
+
+    app.get("/api/files/copy-progress", asyncRoute(async (req, res) => {
+        sendSuccess(res, files.getCopyProgress(req.query.taskId));
+    }));
+
+    app.post("/api/files/move", asyncRoute(async (req, res) => {
+        sendSuccess(res, await files.moveFile(req.body.source, req.body.target));
+    }));
+
+    app.post("/api/files/expand-paths", asyncRoute(async (req, res) => {
+        sendSuccess(res, await files.expandPaths(req.body.paths));
+    }));
+
+    app.post("/api/files/compress", asyncRoute(async (req, res) => {
+        sendSuccess(res, await compressFiles(req.body.files, req.body.targetPath, req.body.format));
+    }));
+
+    app.post("/api/files/extract", asyncRoute(async (req, res) => {
+        sendSuccess(res, await extractArchive(req.body.archivePath, req.body.targetDir));
     }));
 
     app.post("/api/image/upload", upload.single("file"), asyncRoute(async (req, res) => {
@@ -237,6 +278,40 @@ function createApiApp() {
         res.setHeader("Cache-Control", "no-cache");
         res.type(path.extname(mediaPath).replace(".", "") || "application/octet-stream");
         fs.createReadStream(mediaPath).pipe(res);
+    }));
+
+    app.post("/api/ai/chat", asyncRoute(async (req, res) => {
+        const prompt = String(req.body?.prompt || "").trim();
+        if (!prompt) return sendError(res, "prompt 不能为空", 400);
+        const config = toolsConfig.readToolsConfig();
+        const { baseUrl: aiBase, apiKey, model } = config.ai || {};
+        if (!aiBase || !apiKey) return sendError(res, "AI 助手未配置，请先在设置中填写接口参数", 400);
+        const url = `${aiBase.replace(/\/+$/, "")}/chat/completions`;
+        const body = {
+            model: model || "gpt-3.5-turbo",
+            messages: [
+                { role: "system", content: '你是一位 Linux 运维专家。用户会用自然语言描述想在 SSH 终端执行的操作，你需要返回对应的 shell 命令。\n\n严格按以下 JSON 格式返回（不要包含任何 markdown 代码块标记或其它文字）：\n{"description":"操作说明","command":"要执行的命令"}' },
+                { role: "user", content: prompt },
+            ],
+            temperature: 0.3,
+        };
+        const resp = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+            body: JSON.stringify(body),
+        });
+        if (!resp.ok) {
+            const text = await resp.text().catch(() => "");
+            return sendError(res, `AI 接口请求失败 (${resp.status}): ${text}`, resp.status);
+        }
+        const data = await resp.json();
+        const raw = data?.choices?.[0]?.message?.content || "";
+        try {
+            const parsed = JSON.parse(raw.replace(/^```json?\s*/i, "").replace(/```\s*$/i, "").trim());
+            return sendSuccess(res, { description: parsed.description || "", command: parsed.command || "" });
+        } catch {
+            return sendSuccess(res, { description: "", command: raw.trim() });
+        }
     }));
 
     if (fs.existsSync(WEB_DIST_DIR)) {

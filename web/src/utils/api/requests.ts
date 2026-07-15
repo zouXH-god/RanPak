@@ -80,7 +80,26 @@ declare global {
                 saveFolder?: (payload: any) => Promise<any>
                 deleteFolder?: (id: string) => Promise<any>
                 saveProfile?: (payload: any) => Promise<any>
+                importProfilesFromRemote?: (payload: any) => Promise<any>
+                listRemoteImportSources?: () => Promise<any>
+                saveRemoteImportSource?: (payload: any) => Promise<any>
+                deleteRemoteImportSource?: (id: string) => Promise<any>
+                syncRemoteImportSource?: (id: string) => Promise<any>
                 deleteProfile?: (id: string) => Promise<any>
+                listPrivateKeys?: () => Promise<any>
+                savePrivateKey?: (payload: any) => Promise<any>
+                deletePrivateKey?: (id: string) => Promise<any>
+                readPrivateKeyFile?: () => Promise<any>
+                listPresetCommands?: () => Promise<any>
+                savePresetCommand?: (payload: any) => Promise<any>
+                deletePresetCommand?: (id: string) => Promise<any>
+                serverStats?: (profileId: string) => Promise<any>
+                killProcess?: (profileId: string, pid: number) => Promise<any>
+                exec?: (profileId: string, command: string) => Promise<any>
+                downloadDir?: (payload: any) => Promise<any>
+                readRemoteFile?: (payload: any) => Promise<any>
+                writeRemoteFile?: (payload: any) => Promise<any>
+                moveNode?: (payload: any) => Promise<any>
                 connect?: (id: string) => Promise<any>
                 disconnect?: (id: string) => Promise<any>
                 listDir?: (payload: any) => Promise<any>
@@ -97,6 +116,7 @@ declare global {
                 resizeShell?: (payload: any) => Promise<any>
                 stopShell?: (payload: any) => Promise<any>
                 onShellData?: (callback: (payload: any) => void) => () => void
+                onTransferProgress?: (callback: (payload: any) => void) => () => void
             }
             }
     }

@@ -1,0 +1,12 @@
+{
+  "id": "docker-manager",
+  "name": "Docker 管理",
+  "version": "1.0.0",
+  "description": "Docker 容器、镜像、Compose 项目管理",
+  "icon": "svg:<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'><path d='M21 8h-2V6h-2V4h-2v2h-2V4H9v2H7v2H5V6H3v6c0 4.97 4.03 9 9 9s9-4.03 9-9V8z'/></svg>",
+  "author": "ran-pak",
+  "minAppVersion": "1.0.0",
+  "entry": "component.js",
+  "style": "style.css",
+  "capabilities": ["exec", "shell", "httpFetch"]
+}

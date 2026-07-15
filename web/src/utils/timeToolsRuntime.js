@@ -272,11 +272,11 @@ function createRuntime() {
   }
 
   function updateTimerDisplay(command = 'sync', source = '') {
-    if (pomodoroState.running || pomodoroState.awaitingConfirmation) {
-      if (form.pomodoro.showWindow) window.electronAPI?.updateTimerDisplayWindow?.(timerPayload('pomodoro', source === 'pomodoro' ? command : 'sync'))
+    if (source === 'pomodoro' || (!source && (pomodoroState.running || pomodoroState.awaitingConfirmation))) {
+      if (form.pomodoro.showWindow) window.electronAPI?.updateTimerDisplayWindow?.(timerPayload('pomodoro', command))
       return
     }
-    if (form.timer.showWindow) window.electronAPI?.updateTimerDisplayWindow?.(timerPayload('timer', source === 'timer' ? command : 'sync'))
+    if (form.timer.showWindow) window.electronAPI?.updateTimerDisplayWindow?.(timerPayload('timer', command))
   }
 
   function timerPayload(source = 'timer', command = 'sync') {

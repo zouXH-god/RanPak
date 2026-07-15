@@ -1,15 +1,27 @@
 const fs = require("fs");
 const path = require("path");
-const { TOOL_CONFIG_PATH, USER_LIVE2D_DIR, ensureRuntimeDirs } = require("./config");
+const appConfig = require("./config");
 
 const DEFAULT_TOOLS_CONFIG = {
     ffmpeg: {
         ffmpegPath: "",
         ffprobePath: "",
     },
+    meme: {
+        binaryPath: "",
+        port: 2233,
+    },
     live2d: {
         assetsDir: "",
         catalogPath: "",
+    },
+    ai: {
+        baseUrl: "",
+        apiKey: "",
+        model: "",
+    },
+    featureVisibility: {
+        hiddenFeatures: [],
     },
 };
 
@@ -25,19 +37,37 @@ function normalizeConfig(config = {}) {
             ffmpegPath: cleanPath(config.ffmpeg?.ffmpegPath),
             ffprobePath: cleanPath(config.ffmpeg?.ffprobePath),
         },
+        meme: {
+            ...DEFAULT_TOOLS_CONFIG.meme,
+            ...(config.meme || {}),
+            binaryPath: cleanPath(config.meme?.binaryPath),
+            port: Number(config.meme?.port) || 2233,
+        },
         live2d: {
             ...DEFAULT_TOOLS_CONFIG.live2d,
             ...(config.live2d || {}),
             assetsDir: cleanPath(config.live2d?.assetsDir),
             catalogPath: cleanPath(config.live2d?.catalogPath),
         },
+        ai: {
+            ...DEFAULT_TOOLS_CONFIG.ai,
+            ...(config.ai || {}),
+            baseUrl: cleanPath(config.ai?.baseUrl),
+            apiKey: cleanPath(config.ai?.apiKey),
+            model: cleanPath(config.ai?.model),
+        },
+        featureVisibility: {
+            hiddenFeatures: Array.isArray(config.featureVisibility?.hiddenFeatures)
+                ? config.featureVisibility.hiddenFeatures.filter((k) => typeof k === "string")
+                : [],
+        },
     };
 }
 
 function readToolsConfig() {
-    ensureRuntimeDirs();
+    appConfig.ensureRuntimeDirs();
     try {
-        const raw = fs.readFileSync(TOOL_CONFIG_PATH, "utf-8");
+        const raw = fs.readFileSync(appConfig.TOOL_CONFIG_PATH, "utf-8");
         return normalizeConfig(JSON.parse(raw) || {});
     } catch {
         return normalizeConfig();
@@ -48,10 +78,18 @@ function writeToolsConfig(nextConfig = {}) {
     const current = readToolsConfig();
     const merged = normalizeConfig({
         ffmpeg: { ...current.ffmpeg, ...(nextConfig.ffmpeg || {}) },
+        meme: { ...current.meme, ...(nextConfig.meme || {}) },
         live2d: { ...current.live2d, ...(nextConfig.live2d || {}) },
+        ai: { ...current.ai, ...(nextConfig.ai || {}) },
     });
-    fs.mkdirSync(path.dirname(TOOL_CONFIG_PATH), { recursive: true });
-    fs.writeFileSync(TOOL_CONFIG_PATH, JSON.stringify(merged, null, 2), "utf-8");
+    fs.mkdirSync(path.dirname(appConfig.TOOL_CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(appConfig.TOOL_CONFIG_PATH, JSON.stringify(merged, null, 2), "utf-8");
+
+    try {
+        const cloudSync = require("./cloud-sync");
+        cloudSync.triggerSync("ai_config");
+    } catch {}
+
     return merged;
 }
 
@@ -63,7 +101,7 @@ function resolveFfmpegBins(config = readToolsConfig()) {
 }
 
 function resolveLive2dAssetsDir(config = readToolsConfig()) {
-    return cleanPath(config.live2d?.assetsDir) || USER_LIVE2D_DIR;
+    return cleanPath(config.live2d?.assetsDir) || appConfig.USER_LIVE2D_DIR;
 }
 
 function resolveLive2dCatalogPath(config = readToolsConfig()) {
@@ -136,6 +174,31 @@ function readLive2dCatalog(config = readToolsConfig()) {
     }).filter((model) => model.paths.length);
 }
 
+function readFeatureVisibility() {
+    const config = readToolsConfig();
+    return config.featureVisibility || { hiddenFeatures: [] };
+}
+
+function writeFeatureVisibility(featureVisibility = {}) {
+    const current = readToolsConfig();
+    const next = {
+        ...current,
+        featureVisibility: {
+            hiddenFeatures: Array.isArray(featureVisibility.hiddenFeatures)
+                ? featureVisibility.hiddenFeatures.filter((k) => typeof k === "string")
+                : [],
+        },
+    };
+    writeToolsConfig(next);
+
+    try {
+        const cloudSync = require("./cloud-sync");
+        cloudSync.triggerSync("feature_visibility");
+    } catch {}
+
+    return next.featureVisibility;
+}
+
 module.exports = {
     DEFAULT_TOOLS_CONFIG,
     readToolsConfig,
@@ -145,4 +208,6 @@ module.exports = {
     resolveLive2dAssetsDir,
     resolveLive2dCatalogPath,
     readLive2dCatalog,
+    readFeatureVisibility,
+    writeFeatureVisibility,
 };

@@ -1,188 +1,258 @@
 <template>
-  <div class="p-10">
-    <!-- 标题 -->
-    <h2 class="text-2xl font-semibold text-brand-ink mb-6">文件管理</h2>
+  <div class="files-page">
+    <h2 class="page-title">文件管理</h2>
 
-    <!-- 路径导航栏 -->
-    <div class="bg-white rounded-2xl shadow-soft border border-gray-100 overflow-hidden flex items-center pl-3 pt-2 pb-2 mb-6">
-      <el-button :icon="ArrowLeft" circle size="small" @click="goBack" :disabled="pathSegments.length <= 0" />
-      <span class="pl-3 pr-3">/</span>
-      <template v-for="(p, index) in pathSegments" :key="index">
-        <el-text
-            class="mx-1 cursor-pointer text-brand-ink hover:underline"
-            @click="navigateTo(index)"
-        >{{ p }}</el-text>
-        <span class="pl-3 pr-3">/</span>
-      </template>
-    </div>
+    <div class="dual-pane-container">
+      <!-- 左面板 -->
+      <FilePanel
+        ref="leftPanelRef"
+        panel-id="left"
+        :is-active="activePanel === 'left'"
+        @activate="activePanel = 'left'"
+        @selection-change="leftSelected = $event"
+        @path-change="leftPath = $event"
+      />
 
-    <!-- 工具栏 -->
-    <div class="mb-4 flex items-center justify-between">
-      <div>
-        <el-button type="primary" @click="openBatchRenameDialog" :disabled="selectedFiles.length === 0">
-          批量重命名（{{ selectedFiles.length }}）
-        </el-button>
-        <el-button type="danger" :disabled="selectedFiles.length === 0" @click="deleteSelected">
-          删除选中
-        </el-button>
+      <!-- 中间操作栏 -->
+      <div class="action-bar">
+        <el-tooltip content="复制到右侧" placement="top">
+          <el-button :icon="Right" :disabled="!canOperate('left')" @click="doCopy('left')">复制 &gt;&gt;</el-button>
+        </el-tooltip>
+        <el-tooltip content="复制到左侧" placement="top">
+          <el-button :icon="Back" :disabled="!canOperate('right')" @click="doCopy('right')">&lt;&lt; 复制</el-button>
+        </el-tooltip>
+        <el-tooltip content="剪切到右侧" placement="top">
+          <el-button :icon="Right" :disabled="!canOperate('left')" @click="doMove('left')">剪切 &gt;&gt;</el-button>
+        </el-tooltip>
+        <el-tooltip content="剪切到左侧" placement="top">
+          <el-button :icon="Back" :disabled="!canOperate('right')" @click="doMove('right')">&lt;&lt; 剪切</el-button>
+        </el-tooltip>
+        <el-divider />
+        <el-tooltip content="压缩选中文件" placement="top">
+          <el-button :disabled="!hasSelection" @click="openCompress">压缩</el-button>
+        </el-tooltip>
+        <el-tooltip content="解压到另一面板" placement="top">
+          <el-button :disabled="!canExtract" @click="doExtract">解压</el-button>
+        </el-tooltip>
+        <el-divider />
+        <el-tooltip content="删除选中文件" placement="top">
+          <el-button type="danger" :disabled="!hasSelection" @click="doDelete">删除</el-button>
+        </el-tooltip>
+        <el-tooltip content="批量重命名" placement="top">
+          <el-button :disabled="!hasSelection" @click="openBatchRename">重命名</el-button>
+        </el-tooltip>
       </div>
+
+      <!-- 右面板 -->
+      <FilePanel
+        ref="rightPanelRef"
+        panel-id="right"
+        :is-active="activePanel === 'right'"
+        @activate="activePanel = 'right'"
+        @selection-change="rightSelected = $event"
+        @path-change="rightPath = $event"
+      />
     </div>
 
-    <!-- 文件列表 -->
-    <el-table :data="files" style="width: 100%" @selection-change="handleSelectionChange">
-      <el-table-column type="selection" width="55" />
-      <el-table-column label="名称" min-width="280">
-        <template #default="{ row }">
-          <div class="flex items-center space-x-2">
-            <el-icon v-if="row.is_dir" size="20"><Folder /></el-icon>
-            <el-icon v-else size="20"><Document /></el-icon>
-            <span
-                class="cursor-pointer hover:text-blue-600"
-                @click="row.is_dir ? enterDirectory(row.name) : null"
-            >{{ row.name }}</span>
-          </div>
-        </template>
-      </el-table-column>
-      <el-table-column prop="size" label="大小" width="120">
-        <template #default="{ row }">
-          {{ row.is_dir ? '-' : formatSize(row.size) }}
-        </template>
-      </el-table-column>
-      <el-table-column prop="modified_at" label="修改时间" width="180">
-        <template #default="{ row }">
-          {{ formatTime(row.modified_at) }}
-        </template>
-      </el-table-column>
-    </el-table>
+    <!-- 传输面板 -->
+    <TransferPanel ref="transferPanelRef" />
+
+    <!-- 压缩对话框 -->
+    <CompressDialog
+      v-model="compressVisible"
+      :files="activeSelected"
+      :target-dir="targetPath"
+      @done="refreshBoth"
+    />
 
     <!-- 批量重命名对话框 -->
-    <FilesRenameBox v-if="batchRenameVisible" :visible="batchRenameVisible" :files="files" :currentPath="currentPath" :close="closeBatchRenameDialog"/>
+    <FilesRenameBox
+      v-if="batchRenameVisible"
+      :visible="batchRenameVisible"
+      :files="activeFiles"
+      :currentPath="activePath"
+      :close="closeBatchRename"
+    />
   </div>
 </template>
 
 <script setup>
-/**
- * 文件管理页面
- * 支持文件浏览、删除和批量重命名
- */
-import {ref, computed, onMounted} from "vue";
-import {ArrowLeft, Folder, Document} from "@element-plus/icons-vue";
-import {ElMessage, ElMessageBox} from "element-plus";
-import {deleteFile, getFileList} from "../utils/api/files.ts";
+import { ref, computed } from "vue";
+import { Right, Back } from "@element-plus/icons-vue";
+import { ElMessage, ElMessageBox } from "element-plus";
+import FilePanel from "../components/FilePanel.vue";
+import TransferPanel from "../components/TransferPanel.vue";
+import CompressDialog from "../components/CompressDialog.vue";
 import FilesRenameBox from "../components/FilesRenameBox.vue";
+import { useTransferQueue } from "../composables/useTransferQueue.js";
+import { deleteFile, extractArchive } from "../utils/api/files.ts";
 
-const pathSegments = ref([]);
-const files = ref([]);
+const { addTasks } = useTransferQueue();
 
-onMounted(() => {
-  _getFiles("\\");
+const leftPanelRef = ref(null);
+const rightPanelRef = ref(null);
+const transferPanelRef = ref(null);
+
+const activePanel = ref("left");
+const leftSelected = ref([]);
+const rightSelected = ref([]);
+const leftPath = ref("\\");
+const rightPath = ref("\\");
+
+const activeSelected = computed(() => activePanel.value === "left" ? leftSelected.value : rightSelected.value);
+const activePath = computed(() => activePanel.value === "left" ? leftPath.value : rightPath.value);
+const targetPath = computed(() => activePanel.value === "left" ? rightPath.value : leftPath.value);
+const activeFiles = computed(() => {
+    const panel = activePanel.value === "left" ? leftPanelRef.value : rightPanelRef.value;
+    return panel ? [...(leftSelected.value.length > 0 && activePanel.value === "left" ? leftSelected.value : rightSelected.value)] : [];
 });
 
-/** 当前完整路径 */
-const currentPath = computed(() => pathSegments.value.join("\\") + "\\");
+const hasSelection = computed(() => activeSelected.value.length > 0);
 
-const selectedFiles = ref([]);
+function canOperate(fromPanel) {
+    const selected = fromPanel === "left" ? leftSelected.value : rightSelected.value;
+    return selected.length > 0;
+}
 
-const handleSelectionChange = (val) => {
-  selectedFiles.value = val;
-};
+const canExtract = computed(() => {
+    const sel = activeSelected.value;
+    if (sel.length !== 1) return false;
+    const name = sel[0].name.toLowerCase();
+    return name.endsWith(".zip") || name.endsWith(".tar.gz") || name.endsWith(".tgz")
+        || name.endsWith(".7z") || name.endsWith(".rar");
+});
 
-/** 批量删除选中文件 */
-const deleteSelected = async () => {
-  if (
-      await ElMessageBox.confirm(`确定删除 ${selectedFiles.value.length} 个项目？`, "警告", {
-        type: "warning",
-      }).catch(() => false)
-  ) {
-    const promises = selectedFiles.value.map((f) => _deleteFile(f.path));
-    await Promise.allSettled(promises);
-    ElMessage.success("删除完成");
-    await _getFiles(currentPath.value);
-    selectedFiles.value = [];
-  }
-};
+function doCopy(fromPanel) {
+    const selected = fromPanel === "left" ? leftSelected.value : rightSelected.value;
+    const target = fromPanel === "left" ? rightPath.value : leftPath.value;
+    if (selected.length === 0) return;
+    addTasks(selected, target, "copy");
+    if (transferPanelRef.value) transferPanelRef.value.collapsed = false;
+    ElMessage.success(`已将 ${selected.length} 个文件加入复制队列`);
+}
 
-/** 路径回退 */
-const goBack = async () => {
-  if (pathSegments.value.length > 0) {
-    const pop_path = pathSegments.value.pop();
-    const result = await _getFiles(currentPath.value);
-    if (!result) {
-      pathSegments.value.push(pop_path);
+function doMove(fromPanel) {
+    const selected = fromPanel === "left" ? leftSelected.value : rightSelected.value;
+    const target = fromPanel === "left" ? rightPath.value : leftPath.value;
+    if (selected.length === 0) return;
+    addTasks(selected, target, "move");
+    if (transferPanelRef.value) transferPanelRef.value.collapsed = false;
+    ElMessage.success(`已将 ${selected.length} 个文件加入剪切队列`);
+}
+
+// 压缩
+const compressVisible = ref(false);
+function openCompress() {
+    if (!hasSelection.value) return;
+    compressVisible.value = true;
+}
+
+// 解压
+async function doExtract() {
+    const sel = activeSelected.value;
+    if (sel.length !== 1) return;
+    const archivePath = sel[0].path;
+    const targetDir = targetPath.value;
+    try {
+        const res = await extractArchive(archivePath, targetDir);
+        if (res) {
+            ElMessage.success("解压完成");
+            refreshBoth();
+        } else {
+            ElMessage.error("解压失败");
+        }
+    } catch (err) {
+        ElMessage.error("解压失败: " + (err.message || err));
     }
-  }
-};
+}
 
-/** 导航到指定层级 */
-const navigateTo = async (index) => {
-  const oldPath = [...pathSegments.value];
-  pathSegments.value = pathSegments.value.slice(0, index + 1);
-  const result = await _getFiles(currentPath.value);
-  if (!result) {
-    pathSegments.value = oldPath;
-  }
-};
-
-/** 进入子目录 */
-const enterDirectory = async (name) => {
-  pathSegments.value.push(name);
-  const result = await _getFiles(currentPath.value);
-  if (!result) {
-    pathSegments.value.pop();
-  }
-};
+// 删除
+async function doDelete() {
+    const sel = activeSelected.value;
+    if (sel.length === 0) return;
+    const confirmed = await ElMessageBox.confirm(
+        `确定删除 ${sel.length} 个项目？此操作不可撤销。`, "警告", { type: "warning" }
+    ).catch(() => false);
+    if (!confirmed) return;
+    const results = await Promise.allSettled(sel.map((f) => deleteFile(f.path)));
+    const failed = results.filter((r) => r.status === "rejected").length;
+    if (failed > 0) ElMessage.warning(`${sel.length - failed} 个删除成功，${failed} 个失败`);
+    else ElMessage.success("删除完成");
+    refreshActive();
+}
 
 // 批量重命名
 const batchRenameVisible = ref(false);
-const openBatchRenameDialog = () => {
-  batchRenameVisible.value = true;
-};
-const closeBatchRenameDialog = (send) => {
-  batchRenameVisible.value = false;
-  if (send) {
-    ElMessage.success("批量重命名请求已发送");
-    _getFiles(currentPath.value);
-  }
-};
+function openBatchRename() {
+    batchRenameVisible.value = true;
+}
+function closeBatchRename(send) {
+    batchRenameVisible.value = false;
+    if (send) {
+        ElMessage.success("批量重命名请求已发送");
+        refreshActive();
+    }
+}
 
-/** 格式化文件大小 */
-const formatSize = (bytes) => {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-};
+function refreshActive() {
+    const panel = activePanel.value === "left" ? leftPanelRef.value : rightPanelRef.value;
+    if (panel) panel.refresh();
+}
 
-/** 格式化时间戳 */
-const formatTime = (timestamp) => {
-  return new Date(timestamp * 1000).toLocaleString();
-};
-
-/** 获取文件列表 */
-const _getFiles = async (dirPath) => {
-  try {
-    const res = await getFileList(dirPath)
-    if (!res) return false
-    files.value = res.data
-    return true
-  } catch (err) {
-    ElMessage.error(err.message)
-    return false
-  }
-};
-
-/** 删除文件 */
-const _deleteFile = async (filePath) => {
-  return deleteFile(filePath)
-};
+function refreshBoth() {
+    if (leftPanelRef.value) leftPanelRef.value.refresh();
+    if (rightPanelRef.value) rightPanelRef.value.refresh();
+}
 </script>
 
 <style scoped>
-.text-brand-ink {
-  color: #1f2329;
+.files-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 16px;
+    overflow: hidden;
 }
-.shadow-soft {
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+.page-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: #1f2329;
+    margin-bottom: 12px;
+    flex-shrink: 0;
+}
+.dual-pane-container {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    gap: 0;
+    border: 1px solid #e8e8e8;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #f5f5f5;
+}
+.dual-pane-container > :deep(.file-panel) {
+    flex: 1;
+    min-width: 0;
+}
+.action-bar {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 12px 8px;
+    background: #f9f9fb;
+    border-left: 1px solid #e8e8e8;
+    border-right: 1px solid #e8e8e8;
+    flex-shrink: 0;
+    width: 110px;
+}
+.action-bar .el-button {
+    width: 94px;
+    font-size: 12px;
+}
+.action-bar .el-divider {
+    margin: 4px 0;
+    width: 80%;
 }
 </style>

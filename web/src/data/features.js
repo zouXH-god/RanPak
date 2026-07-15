@@ -29,6 +29,7 @@ export const featureGroups = [
       { label: '哈希/HMAC', description: '生成 SHA 哈希或 HMAC 签名。', icon: 'Finished', to: '/hash-hmac', keywords: ['hash', 'sha', 'hmac'] },
       { label: '正则测试', description: '测试正则表达式、匹配项、捕获组和索引。', icon: 'Search', to: '/regex-test', keywords: ['regex', 'regexp', '正则'] },
       { label: '二维码生成', description: '生成二维码 PNG，支持颜色、大小和纠错级别。', icon: 'Grid', to: '/qr-code', keywords: ['qr', 'qrcode', '二维码'] },
+      { label: 'FinalShell Active', description: 'FinalShell 离线激活码生成（≤4.6.5）。', icon: 'Key', to: '/finalshell-active', keywords: ['finalshell', 'active', '激活', 'ssh'] },
     ],
   },
   {
@@ -79,6 +80,7 @@ export const featureGroups = [
       { label: '文本转图片', description: '把文字或代码排版成可导出的图片。', icon: 'Document', to: '/text-to-image', keywords: ['text'] },
       { label: '吧唧打印', description: '生成吧唧排版与打印导出画布。', icon: 'Collection', to: '/badge-print', keywords: ['print'] },
       { label: '拼豆工具', description: '把图片转换为拼豆网格和色号方案。', icon: 'Grid', to: '/perler-beads', keywords: ['perler'] },
+      { label: '表情包制作', description: '使用 meme-generator-rs 浏览、搜索和生成表情包。', icon: 'MagicStick', to: '/meme-maker', keywords: ['meme', '表情', '表情包'] },
     ],
   },
   {
@@ -102,6 +104,15 @@ export const featureGroups = [
     ],
   },
   {
+    key: 'slacking',
+    title: '摸鱼工具',
+    tone: 'amber',
+    icon: 'CoffeeCup',
+    items: [
+      { label: '小说阅读器', description: '导入书源搜索小说，独立窗口阅读体验。', icon: 'Reading', to: '/novel-reader', keywords: ['novel', 'reader', '小说', '阅读', '书源'] },
+    ],
+  },
+  {
     key: 'other',
     title: '其他',
     tone: 'pink',
@@ -109,6 +120,7 @@ export const featureGroups = [
     items: [
       { label: 'Standups', description: '查看和整理站会记录。', icon: 'Tools', to: '/standups', keywords: ['standup'] },
       { label: 'My Calendar', description: '打开日历视图和日程安排。', icon: 'Calendar', to: '/calendar', keywords: ['calendar'] },
+      { label: '云端管理', description: '管理云端同步数据与账号。', icon: 'Upload', to: '/cloud-management', keywords: ['cloud', 'sync', '云端', '同步'] },
       { label: 'Settings', description: '调整应用通用设置。', icon: 'Setting', to: '/settings', keywords: ['settings'] },
     ],
   },
@@ -116,6 +128,49 @@ export const featureGroups = [
 
 export function routePath(to) {
   return typeof to === 'string' ? to : to?.path || ''
+}
+
+export function featureKey(item) {
+  const to = item?.to
+  if (typeof to === 'string') return to
+  const path = to?.path || ''
+  const queryEntries = Object.entries(to?.query || {}).sort(([left], [right]) => left.localeCompare(right))
+  if (queryEntries.length === 0) return path
+  const query = new URLSearchParams(queryEntries.map(([key, value]) => [key, String(value)])).toString()
+  return `${path}?${query}`
+}
+
+export function favoriteFeatureGroup(favoriteKeys, groups = featureGroups) {
+  const favoriteSet = favoriteKeys instanceof Set ? favoriteKeys : new Set(favoriteKeys || [])
+  const items = groups
+    .flatMap((group) => group.items)
+    .filter((item) => favoriteSet.has(featureKey(item)))
+
+  return {
+    key: 'favorites',
+    title: '收藏',
+    tone: 'amber',
+    icon: 'StarFilled',
+    items,
+  }
+}
+
+export function featureGroupsWithFavorites(favoriteKeys, hiddenKeys) {
+  const groups = hiddenKeys instanceof Set && hiddenKeys.size > 0
+    ? filterHiddenFeatures(featureGroups, hiddenKeys)
+    : featureGroups
+  const favGroup = favoriteFeatureGroup(favoriteKeys, groups)
+  return [favGroup, ...groups]
+}
+
+export function filterHiddenFeatures(groups, hiddenKeys) {
+  if (!(hiddenKeys instanceof Set) || hiddenKeys.size === 0) return groups
+  return groups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => !hiddenKeys.has(featureKey(item))),
+    }))
+    .filter((group) => group.items.length > 0)
 }
 
 export function matchesFeatureQuery(item, query) {
@@ -129,8 +184,8 @@ export function matchesFeatureQuery(item, query) {
   ].join(' ').toLowerCase().includes(text)
 }
 
-export function filterFeatureGroups(query) {
-  return featureGroups
+export function filterFeatureGroups(query, groups = featureGroups) {
+  return groups
     .map((group) => ({
       ...group,
       items: group.items.filter((item) => matchesFeatureQuery(item, query)),

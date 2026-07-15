@@ -8,6 +8,45 @@ const { SshRuntime } = require('./services/ssh');
 let win;
 let apiRuntime;
 let clockWin;
+
+function getWindowStatePath() {
+    const runtimeDir = process.env.RAN_PAK_RUNTIME_DIR || path.join(__dirname, '..');
+    return path.join(runtimeDir, 'config', 'window-state.json');
+}
+
+function loadWindowState() {
+    try {
+        return JSON.parse(fs.readFileSync(getWindowStatePath(), 'utf-8'));
+    } catch { return null; }
+}
+
+function saveWindowState(bounds) {
+    try {
+        const dir = path.dirname(getWindowStatePath());
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(getWindowStatePath(), JSON.stringify(bounds), 'utf-8');
+    } catch {}
+}
+
+function ensureBoundsVisible(bounds, defaults = { width: 1600, height: 800 }) {
+    const w = bounds.width && bounds.width >= 400 ? bounds.width : defaults.width;
+    const h = bounds.height && bounds.height >= 300 ? bounds.height : defaults.height;
+    let x = bounds.x ?? undefined;
+    let y = bounds.y ?? undefined;
+    if (x !== undefined && y !== undefined) {
+        const displays = screen.getAllDisplays();
+        const visible = displays.some((d) => {
+            const db = d.workArea;
+            return x + w > db.x + 50 && x < db.x + db.width - 50
+                && y + h > db.y + 50 && y < db.y + db.height - 50;
+        });
+        if (!visible) { x = undefined; y = undefined; }
+    }
+    const result = { width: w, height: h };
+    if (x !== undefined) result.x = x;
+    if (y !== undefined) result.y = y;
+    return result;
+}
 let live2dWin;
 let childWin;
 let reminderWin;
@@ -15,8 +54,10 @@ let timerDisplayWin;
 let reminderPayload = null;
 let timerDisplayPayload = null;
 const taskFlowWindows = new Map();
+const imageViewerWindows = new Map();
 let clickerRuntime;
 let sshRuntime;
+let memeProcess = null;
 let appQuitting = false;
 let childShortcutSignature = '';
 const registeredChildShortcuts = new Set();
@@ -1343,7 +1384,7 @@ function saveTaskFlowSessions() {
                 flowId: entry.payload?.flowId || '',
                 flowName: entry.payload?.flowName || '',
                 nodes: entry.payload?.nodes || [],
-                currentIndex: entry.payload?.currentIndex ?? 0,
+                currentPath: Array.isArray(entry.payload?.currentPath) ? entry.payload.currentPath : [],
                 bounds: entry.win.getBounds(),
             });
         }
@@ -1438,10 +1479,48 @@ function restoreTaskFlowWindows() {
             flowId: session.flowId || '',
             flowName: session.flowName,
             nodes: session.nodes,
-            currentIndex: session.currentIndex || 0,
+            currentPath: Array.isArray(session.currentPath) ? session.currentPath : [],
         });
     });
 }
+
+function openImageViewerWindow(payload = {}) {
+    const bounds = ensureBoundsInDisplay(payload._bounds || { width: 760, height: 600 });
+    const viewerWin = new BrowserWindow({
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        icon: getAppIcon(),
+        show: false,
+        frame: false,
+        backgroundColor: '#eef2f7',
+        title: payload.name || '图片查看',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            devTools: true,
+        },
+    });
+    imageViewerWindows.set(viewerWin.id, { src: payload.src || '', name: payload.name || '' });
+    viewerWin.removeMenu?.();
+    viewerWin.loadURL(buildRendererUrl('/image-viewer'));
+    viewerWin.once('ready-to-show', () => viewerWin.show());
+    viewerWin.on('closed', () => imageViewerWindows.delete(viewerWin.id));
+    return viewerWin.id;
+}
+
+ipcMain.handle('image-viewer:open', async (_event, payload = {}) => {
+    if (!payload || !payload.src) return false;
+    openImageViewerWindow(payload);
+    return true;
+});
+ipcMain.handle('image-viewer:get-data', async (event) => {
+    const currentWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!currentWindow) return null;
+    return imageViewerWindows.get(currentWindow.id) || null;
+});
 
 ipcMain.handle('task-flow:open', async (_event, payload = {}) => openTaskFlowWindow(payload));
 ipcMain.handle('task-flow:close', async (event, sessionId) => {
@@ -1479,7 +1558,7 @@ ipcMain.handle('task-flow:update-session', async (event, payload = {}) => {
     if (!currentWindow) return false;
     for (const [, entry] of taskFlowWindows) {
         if (entry.win && entry.win.id === currentWindow.id) {
-            if (typeof payload.currentIndex === 'number') entry.payload.currentIndex = payload.currentIndex;
+            if (Array.isArray(payload.currentPath)) entry.payload.currentPath = payload.currentPath;
             saveTaskFlowSessions();
             return true;
         }
@@ -1493,9 +1572,6 @@ ipcMain.handle('task-flow:sync-nodes', async (_event, payload = {}) => {
         if (entry.payload?.flowId === flowId && entry.win && !entry.win.isDestroyed()) {
             entry.payload.flowName = flowName ?? entry.payload.flowName;
             entry.payload.nodes = nodes ?? entry.payload.nodes;
-            if (entry.payload.currentIndex >= (nodes || []).length) {
-                entry.payload.currentIndex = Math.max(0, (nodes || []).length - 1);
-            }
             entry.win.webContents.send('task-flow:options', entry.payload);
         }
     });
@@ -1508,6 +1584,32 @@ ipcMain.handle('task-flow:event', async (_event, payload = {}) => {
     });
     return true;
 });
+
+function htmlToPlainText(html = '') {
+    return String(html)
+        .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+        .replace(/<\s*\/(p|div|h[1-6]|li)\s*>/gi, '\n')
+        .replace(/<\s*img[^>]*>/gi, '[图片]')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+function walkFlowNodes(nodes = [], depth = 0, prefix = '') {
+    const entries = [];
+    (nodes || []).forEach((node, index) => {
+        const label = prefix ? `${prefix}.${index + 1}` : `${index + 1}`;
+        entries.push({ node, depth, label });
+        if (Array.isArray(node.children) && node.children.length) {
+            entries.push(...walkFlowNodes(node.children, depth + 1, label));
+        }
+    });
+    return entries;
+}
 
 ipcMain.handle('task-flow:export', async (_event, payload = {}) => {
     const { flow, format } = payload;
@@ -1523,35 +1625,42 @@ ipcMain.handle('task-flow:export', async (_event, payload = {}) => {
         filters: filters[format] || filters.txt,
     });
     if (result.canceled || !result.filePath) return { ok: false, error: '已取消' };
+    const entries = walkFlowNodes(flow.nodes || []);
     try {
         if (format === 'txt') {
             const lines = [`任务流: ${flow.name || '未命名'}\n`];
-            (flow.nodes || []).forEach((node, i) => {
-                lines.push(`[${i + 1}] ${node.name || '未命名节点'}`);
-                if (node.description) lines.push(node.description);
+            entries.forEach(({ node, depth, label }) => {
+                const indent = '    '.repeat(depth);
+                lines.push(`${indent}[${label}] ${node.name || '未命名节点'}`);
+                const text = htmlToPlainText(node.content);
+                if (text) text.split('\n').forEach((line) => lines.push(`${indent}    ${line}`));
                 lines.push('');
             });
             fs.writeFileSync(result.filePath, lines.join('\n'), 'utf-8');
         } else if (format === 'md') {
             const lines = [`# ${flow.name || '未命名'}\n`];
-            (flow.nodes || []).forEach((node, i) => {
-                lines.push(`## ${i + 1}. ${node.name || '未命名节点'}\n`);
-                if (node.description) lines.push(`${node.description}\n`);
+            entries.forEach(({ node, depth, label }) => {
+                const hashes = '#'.repeat(Math.min(6, depth + 2));
+                lines.push(`${hashes} ${label}. ${node.name || '未命名节点'}\n`);
+                const text = htmlToPlainText(node.content);
+                if (text) lines.push(`${text}\n`);
             });
             fs.writeFileSync(result.filePath, lines.join('\n'), 'utf-8');
         } else if (format === 'docx') {
             const { Document, Packer, Paragraph, TextRun, HeadingLevel } = require('docx');
+            const headingByDepth = [HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4, HeadingLevel.HEADING_5, HeadingLevel.HEADING_6];
             const children = [
                 new Paragraph({ text: flow.name || '未命名', heading: HeadingLevel.HEADING_1 }),
                 new Paragraph({ text: '' }),
             ];
-            (flow.nodes || []).forEach((node, i) => {
+            entries.forEach(({ node, depth, label }) => {
                 children.push(new Paragraph({
-                    text: `${i + 1}. ${node.name || '未命名节点'}`,
-                    heading: HeadingLevel.HEADING_2,
+                    text: `${label}. ${node.name || '未命名节点'}`,
+                    heading: headingByDepth[Math.min(headingByDepth.length - 1, depth)],
                 }));
-                if (node.description) {
-                    node.description.split('\n').forEach((line) => {
+                const text = htmlToPlainText(node.content);
+                if (text) {
+                    text.split('\n').forEach((line) => {
                         children.push(new Paragraph({ children: [new TextRun(line)] }));
                     });
                 }
@@ -1842,6 +1951,23 @@ ipcMain.handle('shell:open-external', async (_event, url) => {
     return true;
 });
 
+ipcMain.handle('shell:open-path', async (_event, filePath) => {
+    const target = String(filePath || '').trim();
+    if (!target) return { ok: false, error: '路径为空' };
+    const errorMessage = await shell.openPath(target);
+    if (errorMessage) return { ok: false, error: errorMessage };
+    return { ok: true };
+});
+
+ipcMain.handle('dialog:select-any-file', async () => {
+    const result = await dialog.showOpenDialog(win, {
+        title: '选择文件',
+        properties: ['openFile'],
+        filters: [{ name: '全部文件', extensions: ['*'] }],
+    });
+    return result.canceled ? '' : (result.filePaths[0] || '');
+});
+
 ipcMain.handle('clock-window:open', async (_event, options = {}) => {
     return openClockWindow(options);
 });
@@ -2014,13 +2140,72 @@ ipcMain.handle('ssh:save-folder', async (_event, payload = {}) => safeSshCall(()
 ipcMain.handle('ssh:delete-folder', async (_event, id = '') => safeSshCall(() => getSshRuntime().deleteFolder(id)));
 ipcMain.handle('ssh:move-node', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().moveNode(payload)));
 ipcMain.handle('ssh:save-profile', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().saveProfile(payload)));
+ipcMain.handle('ssh:import-profiles-remote', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().importProfilesFromRemote(payload)));
+ipcMain.handle('ssh:import-profiles-text', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().importProfilesFromText(payload)));
+ipcMain.handle('ssh:import-profiles-file', async (_event, folderId = '') => {
+    const result = await dialog.showOpenDialog(win, {
+        title: '选择 SSH 配置文件',
+        properties: ['openFile'],
+        filters: [
+            { name: 'JSON 文件', extensions: ['json'] },
+            { name: '全部文件', extensions: ['*'] },
+        ],
+    });
+    if (result.canceled || !result.filePaths?.length) return { ok: true, data: null };
+    const fs = require('fs');
+    const text = fs.readFileSync(result.filePaths[0], 'utf-8');
+    return safeSshCall(() => getSshRuntime().importProfilesFromText({ text, folderId }));
+});
+ipcMain.handle('ssh:remote-import-sources', async () => safeSshCall(() => getSshRuntime().listRemoteImportSources()));
+ipcMain.handle('ssh:remote-import-source-save', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().saveRemoteImportSource(payload)));
+ipcMain.handle('ssh:remote-import-source-delete', async (_event, id = '') => safeSshCall(() => getSshRuntime().deleteRemoteImportSource(id)));
+ipcMain.handle('ssh:remote-import-source-sync', async (_event, id = '') => safeSshCall(() => getSshRuntime().syncRemoteImportSource(id)));
 ipcMain.handle('ssh:delete-profile', async (_event, id = '') => safeSshCall(() => getSshRuntime().deleteProfile(id)));
+ipcMain.handle('ssh:list-private-keys', async () => safeSshCall(() => getSshRuntime().listPrivateKeys()));
+ipcMain.handle('ssh:save-private-key', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().savePrivateKey(payload)));
+ipcMain.handle('ssh:delete-private-key', async (_event, id = '') => safeSshCall(() => getSshRuntime().deletePrivateKey(id)));
+ipcMain.handle('ssh:read-private-key-file', async () => {
+    const result = await dialog.showOpenDialog(win, {
+        title: '选择 SSH 私钥文件',
+        properties: ['openFile'],
+        filters: [
+            { name: '私钥文件', extensions: ['pem', 'key', 'ppk', '*'] },
+            { name: '全部文件', extensions: ['*'] },
+        ],
+    });
+    if (result.canceled || !result.filePaths[0]) return { ok: true, data: '' };
+    try {
+        const content = fs.readFileSync(result.filePaths[0], 'utf-8');
+        return { ok: true, data: content };
+    } catch (error) {
+        return { ok: false, error: error?.message || '读取文件失败' };
+    }
+});
+ipcMain.handle('ssh:list-preset-commands', async () => safeSshCall(() => getSshRuntime().listPresetCommands()));
+ipcMain.handle('ssh:save-preset-command', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().savePresetCommand(payload)));
+ipcMain.handle('ssh:delete-preset-command', async (_event, id = '') => safeSshCall(() => getSshRuntime().deletePresetCommand(id)));
 ipcMain.handle('ssh:connect', async (_event, id = '') => safeSshCall(() => getSshRuntime().connect(id)));
 ipcMain.handle('ssh:disconnect', async (_event, id = '') => safeSshCall(() => getSshRuntime().disconnect(id)));
 ipcMain.handle('ssh:list-dir', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().listDir(payload)));
 ipcMain.handle('ssh:upload', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().upload(payload)));
 ipcMain.handle('ssh:download', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().download(payload)));
 ipcMain.handle('ssh:download-temp', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().downloadToTemp(payload)));
+ipcMain.handle('ssh:server-stats', async (_event, profileId = '') => safeSshCall(() => getSshRuntime().getServerStats(profileId)));
+ipcMain.handle('ssh:kill-process', async (_event, profileId = '', pid = 0) => safeSshCall(() => getSshRuntime().killProcess(profileId, pid)));
+ipcMain.handle('ssh:exec', async (_event, profileId = '', command = '') => safeSshCall(() => getSshRuntime().execCommand(profileId, command)));
+
+ipcMain.handle('http:fetch', async (_event, url = '', options = {}) => {
+    try {
+        const resp = await fetch(url, { method: options.method || 'GET', headers: options.headers || {}, body: options.body || undefined });
+        const text = await resp.text();
+        return { ok: resp.ok, status: resp.status, data: text };
+    } catch (error) {
+        return { ok: false, status: 0, data: '', error: error?.message || '请求失败' };
+    }
+});
+ipcMain.handle('ssh:download-dir', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().downloadDir(payload)));
+ipcMain.handle('ssh:read-remote-file', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().readRemoteFile(payload)));
+ipcMain.handle('ssh:write-remote-file', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().writeRemoteFile(payload)));
 ipcMain.handle('ssh:start-drag', async (event, filePath) => {
     if (!filePath || !fs.existsSync(filePath)) return { ok: false, error: '文件不存在' };
     event.sender.startDrag({
@@ -2039,6 +2224,213 @@ ipcMain.handle('ssh:shell-start', async (_event, payload = {}) => safeSshCall(()
 ipcMain.handle('ssh:shell-write', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().writeShell(payload)));
 ipcMain.handle('ssh:shell-resize', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().resizeShell(payload)));
 ipcMain.handle('ssh:shell-stop', async (_event, payload = {}) => safeSshCall(() => getSshRuntime().stopShell(payload)));
+
+// --- SSH Plugins IPC ---
+const pluginManager = require('./services/ssh/plugin-manager');
+
+ipcMain.handle('ssh-plugins:list', async () => {
+    try { return { ok: true, data: pluginManager.listPlugins() }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('ssh-plugins:load', async (_event, pluginId = '') => {
+    try { return { ok: true, data: pluginManager.loadPluginCode(pluginId) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('ssh-plugins:set-enabled', async (_event, pluginId = '', enabled = true) => {
+    try { return { ok: true, data: pluginManager.setPluginEnabled(pluginId, enabled) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('ssh-plugins:set-order', async (_event, orderedIds = []) => {
+    try { pluginManager.setPluginOrder(orderedIds); return { ok: true }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('ssh-plugins:install-url', async (_event, url = '') => {
+    try { return { ok: true, data: await pluginManager.installFromUrl(url) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('ssh-plugins:install-file', async () => {
+    try {
+        const { dialog } = require('electron');
+        const result = await dialog.showOpenDialog({
+            title: '选择插件包',
+            filters: [{ name: 'ZIP', extensions: ['zip'] }],
+            properties: ['openFile'],
+        });
+        if (result.canceled || !result.filePaths.length) return { ok: false, error: 'cancelled' };
+        const zipBuffer = fs.readFileSync(result.filePaths[0]);
+        const installResult = await pluginManager.installFromZip(zipBuffer, path.basename(result.filePaths[0]));
+        return { ok: true, data: installResult };
+    } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('ssh-plugins:uninstall', async (_event, pluginId = '') => {
+    try { return { ok: true, data: pluginManager.uninstallPlugin(pluginId) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('ssh-plugins:fetch-registry', async (_event, registryUrl = '') => {
+    try { return { ok: true, data: await pluginManager.fetchRegistry(registryUrl) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('ssh-plugins:list-bundled', async () => {
+    try { return { ok: true, data: pluginManager.listBundledPlugins() }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+
+// --- Cloud Sync IPC ---
+const cloudSync = require('./services/cloud-sync');
+
+cloudSync.registerDataType('ai_config', () => {
+    const tc = require('./services/tools-config');
+    const cfg = tc.readToolsConfig();
+    return { ...cfg.ai, _updatedAt: Date.now() };
+}, (data) => {
+    const tc = require('./services/tools-config');
+    const current = tc.readToolsConfig();
+    tc.writeToolsConfig({ ...current, ai: data });
+});
+
+cloudSync.registerDataType('feature_visibility', () => {
+    const tc = require('./services/tools-config');
+    return { ...tc.readFeatureVisibility(), _updatedAt: Date.now() };
+}, (data) => {
+    const tc = require('./services/tools-config');
+    tc.writeFeatureVisibility(data);
+});
+
+cloudSync.registerDataType('ssh_profiles', () => {
+    return getSshRuntime().exportProfilesForSync();
+}, (data) => {
+    getSshRuntime().importProfilesFromSync(data);
+});
+
+cloudSync.registerDataType('ssh_preset_commands', () => {
+    return getSshRuntime().exportPresetCommandsForSync();
+}, (data) => {
+    getSshRuntime().importPresetCommandsFromSync(data);
+});
+
+const sshHistoryPath = () => {
+    const runtimeDir = process.env.RAN_PAK_RUNTIME_DIR || path.join(__dirname, '..');
+    return path.join(runtimeDir, 'config', 'ssh-history.json');
+};
+
+function readSshHistory() {
+    try { return JSON.parse(fs.readFileSync(sshHistoryPath(), 'utf-8')); }
+    catch { return []; }
+}
+
+function writeSshHistory(data) {
+    const dir = path.dirname(sshHistoryPath());
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(sshHistoryPath(), JSON.stringify(data), 'utf-8');
+}
+
+cloudSync.registerDataType('ssh_history', () => {
+    return readSshHistory();
+}, (data) => {
+    if (Array.isArray(data)) writeSshHistory(data);
+});
+
+ipcMain.handle('ssh:get-history', async () => {
+    return { ok: true, data: readSshHistory() };
+});
+ipcMain.handle('ssh:save-history', async (_event, data) => {
+    writeSshHistory(data);
+    cloudSync.triggerSync('ssh_history');
+    return { ok: true };
+});
+
+cloudSync.registerDataType('dns_accounts', () => {
+    const { loadDnsConfig } = require('./services/config');
+    const cfg = loadDnsConfig();
+    return cfg.dns_access || [];
+}, (data) => {
+    if (Array.isArray(data)) {
+        const { saveDnsConfig } = require('./services/config');
+        saveDnsConfig({ dns_access: data });
+    }
+});
+
+// 远端数据变更时通知前端刷新
+cloudSync.onDataUpdated((type, data) => {
+    BrowserWindow.getAllWindows().forEach((targetWindow) => {
+        if (!targetWindow.isDestroyed()) {
+            targetWindow.webContents.send('cloud-sync:data-updated', { type, data });
+        }
+    });
+});
+
+// 应用启动后如果已登录则自动开始轮询（需在 app.whenReady 后环境变量设置完毕后调用）
+function initCloudSyncPolling() {
+    cloudSync.reloadConfig();
+    if (cloudSync.isLoggedIn()) {
+        cloudSync.startPolling(30000);
+    }
+}
+
+ipcMain.handle('cloud-sync:get-status', async () => {
+    try { return { ok: true, data: cloudSync.getStatus() }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('cloud-sync:login', async (_event, { url, username, password, totpCode }) => {
+    try { return { ok: true, data: await cloudSync.login(url, username, password, totpCode) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('cloud-sync:register', async (_event, { url, username, password }) => {
+    try { return { ok: true, data: await cloudSync.register(url, username, password) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('cloud-sync:logout', async () => {
+    try { return { ok: true, data: cloudSync.logout() }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('cloud-sync:sync-now', async () => {
+    try { return { ok: true, data: await cloudSync.syncAll() }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('cloud-sync:get-config', async () => {
+    try { return { ok: true, data: cloudSync.getCloudConfig() }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('cloud-sync:get-users', async () => {
+    try { return { ok: true, data: await cloudSync.getUsers() }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('cloud-sync:create-user', async (_event, data) => {
+    try { return { ok: true, data: await cloudSync.createUser(data) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('cloud-sync:update-user', async (_event, { id, ...data }) => {
+    try { return { ok: true, data: await cloudSync.updateUser(id, data) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('cloud-sync:delete-user', async (_event, id) => {
+    try { return { ok: true, data: await cloudSync.deleteUser(id) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('cloud-sync:approve-user', async (_event, id) => {
+    try { return { ok: true, data: await cloudSync.approveUser(id) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('cloud-sync:get-server-settings', async () => {
+    try { return { ok: true, data: await cloudSync.getServerSettings() }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('cloud-sync:update-server-settings', async (_event, data) => {
+    try { return { ok: true, data: await cloudSync.updateServerSettings(data) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('cloud-sync:totp-setup', async () => {
+    try { return { ok: true, data: await cloudSync.totpSetup() }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('cloud-sync:totp-enable', async (_event, data) => {
+    try { return { ok: true, data: await cloudSync.totpEnable(data) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('cloud-sync:totp-disable', async (_event, data) => {
+    try { return { ok: true, data: await cloudSync.totpDisable(data) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
 
 function getClickerRuntime() {
     if (!clickerRuntime) {
@@ -2076,6 +2468,227 @@ ipcMain.handle('app:set-auto-launch', (_event, enabled) => {
     return true;
 });
 
+// --- Meme Generator Service ---
+
+function getMemeConfig() {
+    try {
+        const { readToolsConfig } = require('./services/tools-config');
+        const cfg = readToolsConfig();
+        return cfg?.meme || { binaryPath: '', port: 2233 };
+    } catch { return { binaryPath: '', port: 2233 }; }
+}
+
+function startMemeService() {
+    if (memeProcess) return { running: true, port: getMemeConfig().port };
+    const config = getMemeConfig();
+    if (!config.binaryPath) return { running: false, error: '未配置可执行文件路径' };
+    const { spawn } = require('child_process');
+    const port = config.port || 2233;
+    try {
+        memeProcess = spawn(config.binaryPath, ['run', '--port', String(port)], {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            windowsHide: true,
+        });
+        memeProcess.on('error', (err) => {
+            console.error('[meme-service] spawn error:', err.message);
+            memeProcess = null;
+            BrowserWindow.getAllWindows().forEach((w) => {
+                if (!w.isDestroyed()) w.webContents.send('meme:status-changed', { running: false, error: err.message });
+            });
+        });
+        memeProcess.on('exit', (code) => {
+            console.log('[meme-service] exited with code', code);
+            memeProcess = null;
+            BrowserWindow.getAllWindows().forEach((w) => {
+                if (!w.isDestroyed()) w.webContents.send('meme:status-changed', { running: false });
+            });
+        });
+        return { running: true, port };
+    } catch (err) {
+        memeProcess = null;
+        return { running: false, error: err.message };
+    }
+}
+
+function stopMemeService() {
+    if (!memeProcess) return { running: false };
+    try { memeProcess.kill(); } catch {}
+    memeProcess = null;
+    return { running: false };
+}
+
+async function getMemeServiceStatus() {
+    const config = getMemeConfig();
+    const port = config.port || 2233;
+    if (!memeProcess) return { running: false, port };
+    try {
+        const resp = await fetch(`http://127.0.0.1:${port}/meme/version`);
+        if (resp.ok) return { running: true, port };
+        return { running: true, port, reachable: false };
+    } catch {
+        return { running: true, port, reachable: false };
+    }
+}
+
+function getMemeHome() {
+    if (process.env.MEME_HOME) return process.env.MEME_HOME;
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    return path.join(home, '.meme_generator');
+}
+
+function runMemeCommand(args) {
+    return new Promise((resolve) => {
+        const config = getMemeConfig();
+        if (!config.binaryPath) return resolve({ success: false, error: '未配置可执行文件路径' });
+        const { spawn } = require('child_process');
+        let stdout = '';
+        let stderr = '';
+        try {
+            const proc = spawn(config.binaryPath, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+            proc.stdout.on('data', (d) => { stdout += d.toString(); });
+            proc.stderr.on('data', (d) => { stderr += d.toString(); });
+            proc.on('error', (err) => resolve({ success: false, error: err.message }));
+            proc.on('exit', (code) => resolve({ success: code === 0, stdout, stderr, code }));
+        } catch (err) {
+            resolve({ success: false, error: err.message });
+        }
+    });
+}
+
+async function downloadExternalMeme(url) {
+    const memeHome = getMemeHome();
+    const libDir = path.join(memeHome, 'libraries');
+    fs.mkdirSync(libDir, { recursive: true });
+
+    const configPath = path.join(memeHome, 'config.toml');
+    try {
+        let configContent = '';
+        if (fs.existsSync(configPath)) configContent = fs.readFileSync(configPath, 'utf-8');
+        if (!configContent.includes('load_external_memes')) {
+            configContent += '\n[meme]\nload_external_memes = true\n';
+            fs.writeFileSync(configPath, configContent, 'utf-8');
+        } else if (configContent.includes('load_external_memes = false')) {
+            configContent = configContent.replace('load_external_memes = false', 'load_external_memes = true');
+            fs.writeFileSync(configPath, configContent, 'utf-8');
+        }
+    } catch {}
+
+    const https = require('https');
+    const http = require('http');
+    const fileName = path.basename(new URL(url).pathname) || 'external_meme_lib';
+    const destPath = path.join(libDir, fileName);
+
+    return new Promise((resolve) => {
+        const doFetch = (targetUrl, redirects = 0) => {
+            if (redirects > 5) return resolve({ success: false, error: '重定向次数过多' });
+            const mod = targetUrl.startsWith('https') ? https : http;
+            mod.get(targetUrl, { headers: { 'User-Agent': 'RanPak/1.0' } }, (resp) => {
+                if (resp.statusCode >= 300 && resp.statusCode < 400 && resp.headers.location) {
+                    return doFetch(resp.headers.location, redirects + 1);
+                }
+                if (resp.statusCode !== 200) {
+                    return resolve({ success: false, error: `下载失败: HTTP ${resp.statusCode}` });
+                }
+                const fileStream = fs.createWriteStream(destPath);
+                resp.pipe(fileStream);
+                fileStream.on('finish', () => {
+                    fileStream.close();
+                    resolve({ success: true, path: destPath, fileName });
+                });
+                fileStream.on('error', (err) => resolve({ success: false, error: err.message }));
+            }).on('error', (err) => resolve({ success: false, error: err.message }));
+        };
+        doFetch(url);
+    });
+}
+
+ipcMain.handle('meme:start', async () => startMemeService());
+ipcMain.handle('meme:stop', async () => stopMemeService());
+ipcMain.handle('meme:status', async () => getMemeServiceStatus());
+ipcMain.handle('meme:download', async () => runMemeCommand(['download']));
+ipcMain.handle('meme:download-external', async (_event, url) => downloadExternalMeme(url));
+ipcMain.handle('meme:get-home', () => getMemeHome());
+
+ipcMain.handle('meme:upload-local-image', async (_event, filePath, memePort) => {
+    try {
+        const fileBuffer = fs.readFileSync(filePath);
+        const fileName = path.basename(filePath);
+        const ext = path.extname(filePath).slice(1).toLowerCase();
+        const mimeMap = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml' };
+        const mime = mimeMap[ext] || 'application/octet-stream';
+        const boundary = '----MemeUpload' + Date.now() + Math.random().toString(36).slice(2);
+        const header = `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${fileName}"\r\nContent-Type: ${mime}\r\n\r\n`;
+        const footer = `\r\n--${boundary}--\r\n`;
+        const body = Buffer.concat([Buffer.from(header), fileBuffer, Buffer.from(footer)]);
+        const resp = await fetch(`http://127.0.0.1:${memePort}/image/upload/multipart`, {
+            method: 'POST',
+            headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+            body,
+        });
+        if (!resp.ok) return { success: false, error: `HTTP ${resp.status}` };
+        const data = await resp.json();
+        return { success: true, imageId: data.image_id, name: path.basename(filePath, path.extname(filePath)) };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+});
+
+ipcMain.handle('meme:save-image-to-path', async (_event, imageUrl, savePath) => {
+    try {
+        const resp = await fetch(imageUrl);
+        if (!resp.ok) return { success: false, error: `HTTP ${resp.status}` };
+        const buffer = Buffer.from(await resp.arrayBuffer());
+        fs.writeFileSync(savePath, buffer);
+        return { success: true };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+});
+
+ipcMain.handle('dialog:select-meme-binary', async () => {
+    const result = await dialog.showOpenDialog(win, {
+        title: '选择 meme-generator-rs 可执行文件',
+        properties: ['openFile'],
+        filters: [
+            { name: '可执行文件', extensions: process.platform === 'win32' ? ['exe'] : ['*'] },
+            { name: '全部文件', extensions: ['*'] },
+        ],
+    });
+    return result.canceled ? '' : (result.filePaths[0] || '');
+});
+
+ipcMain.handle('clipboard:copy-image', async (_event, url) => {
+    const { clipboard } = require('electron');
+    const http = require('http');
+    const os = require('os');
+    return new Promise((resolve) => {
+        http.get(url, (resp) => {
+            const chunks = [];
+            resp.on('data', (chunk) => chunks.push(chunk));
+            resp.on('end', () => {
+                const buf = Buffer.concat(chunks);
+                const contentType = resp.headers['content-type'] || '';
+                const ext = contentType.includes('gif') ? '.gif' : contentType.includes('png') ? '.png' : '.png';
+                const tmpFile = path.join(os.tmpdir(), `meme_clip_${Date.now()}${ext}`);
+                fs.writeFileSync(tmpFile, buf);
+                if (ext === '.gif') {
+                    clipboard.writeBuffer('FileNameW', Buffer.from(tmpFile + '\0', 'ucs2'));
+                    clipboard.write({ html: `<img src="file://${tmpFile.replace(/\\/g, '/')}">` });
+                }
+                const image = nativeImage.createFromBuffer(buf);
+                if (!image.isEmpty()) {
+                    clipboard.writeImage(image);
+                    resolve({ success: true });
+                } else {
+                    clipboard.writeBuffer('FileNameW', Buffer.from(tmpFile + '\0', 'ucs2'));
+                    resolve({ success: true });
+                }
+            });
+            resp.on('error', (err) => resolve({ success: false, error: err.message }));
+        }).on('error', (err) => resolve({ success: false, error: err.message }));
+    });
+});
+
 ipcMain.handle('window:minimize', () => {
     win?.minimize();
 });
@@ -2095,9 +2708,11 @@ ipcMain.handle('window:close', () => {
 });
 
 async function createWindow() {
+    const saved = loadWindowState();
+    const bounds = saved ? ensureBoundsVisible(saved) : { width: 1600, height: 800 };
+
     win = new BrowserWindow({
-        width: 1600,
-        height: 800,
+        ...bounds,
         icon: getAppIcon(),
         title: "逝染终端",
         transparent: true,
@@ -2112,7 +2727,22 @@ async function createWindow() {
 
     win.loadURL(buildRendererUrl('/'));
 
+    let saveTimer = null;
+    const debounceSave = () => {
+        if (saveTimer) clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => {
+            if (!win || win.isMinimized() || win.isMaximized() || win.isFullScreen()) return;
+            saveWindowState(win.getBounds());
+        }, 500);
+    };
+    win.on('resize', debounceSave);
+    win.on('move', debounceSave);
+
     win.on('close', (event) => {
+        if (saveTimer) clearTimeout(saveTimer);
+        if (win && !win.isMinimized() && !win.isMaximized() && !win.isFullScreen()) {
+            saveWindowState(win.getBounds());
+        }
         if (!appQuitting) {
             event.preventDefault();
             app.quit();
@@ -2129,6 +2759,8 @@ app.whenReady().then(async () => {
     const { startApiServer } = require('./services/api-server');
     apiRuntime = await startApiServer();
     process.env.RAN_PAK_API_BASE_URL = apiRuntime.baseUrl;
+    try { pluginManager.syncBundledPlugins(); } catch (e) { console.error('[plugins] sync bundled plugins failed:', e.message); }
+    initCloudSyncPolling();
     await createWindow();
     const childConfig = readChildWindowConfig();
     registerChildShortcuts(childConfig);
@@ -2208,6 +2840,7 @@ app.on('before-quit', () => {
     if (sshRuntime) {
         sshRuntime.dispose();
     }
+    stopMemeService();
     unregisterChildShortcuts();
     screen.removeListener('display-metrics-changed', keepChildWindowsOnScreen);
     screen.removeListener('display-removed', keepChildWindowsOnScreen);

@@ -2,6 +2,16 @@ const fs = require("fs/promises");
 const fsSync = require("fs");
 const os = require("os");
 const path = require("path");
+const { pipeline } = require("stream/promises");
+
+const CHUNK_SIZE_DEFAULT = 10 * 1024 * 1024; // 10MB
+const BIG_FILE_THRESHOLD = 100 * 1024 * 1024; // 100MB
+
+const chunkedTasks = new Map();
+
+function generateTaskId() {
+    return `task-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 function toFileInfo(filePath, stat) {
     return {
@@ -102,9 +112,151 @@ async function renameByRegex(dirPath, regexSource, newName, onlyFile = true) {
     return renamed;
 }
 
+async function copyFile(source, target) {
+    if (!source || !target) throw new Error("源路径和目标路径不能为空");
+    if (!fsSync.existsSync(source)) throw new Error("源文件不存在");
+    const stat = await fs.stat(source);
+    if (stat.isDirectory()) throw new Error("不支持直接复制目录，请逐文件复制");
+    await fs.copyFile(source, target);
+    return { source, target, size: stat.size };
+}
+
+async function startChunkedCopy(source, target, chunkSize) {
+    if (!source || !target) throw new Error("源路径和目标路径不能为空");
+    if (!fsSync.existsSync(source)) throw new Error("源文件不存在");
+    const stat = await fs.stat(source);
+    if (stat.isDirectory()) throw new Error("不支持对目录进行分块复制");
+
+    const size = stat.size;
+    const chunk = chunkSize || CHUNK_SIZE_DEFAULT;
+    const totalChunks = Math.ceil(size / chunk);
+    const taskId = generateTaskId();
+
+    // Pre-allocate target file
+    const fd = await fs.open(target, "w");
+    await fd.truncate(size);
+    await fd.close();
+
+    const task = {
+        taskId,
+        source,
+        target,
+        totalSize: size,
+        chunkSize: chunk,
+        totalChunks,
+        completedChunks: 0,
+        status: "running",
+    };
+    chunkedTasks.set(taskId, task);
+    return { taskId, totalChunks, chunkSize: chunk, totalSize: size };
+}
+
+async function copyChunk(taskId, chunkIndex) {
+    const task = chunkedTasks.get(taskId);
+    if (!task) throw new Error("任务不存在或已过期");
+    if (task.status === "done") throw new Error("任务已完成");
+
+    const start = chunkIndex * task.chunkSize;
+    const end = Math.min(start + task.chunkSize, task.totalSize);
+    const length = end - start;
+
+    const readStream = fsSync.createReadStream(task.source, { start, end: end - 1 });
+    const writeStream = fsSync.createWriteStream(task.target, { flags: "r+", start });
+
+    await pipeline(readStream, writeStream);
+
+    task.completedChunks = Math.max(task.completedChunks, chunkIndex + 1);
+    const done = task.completedChunks >= task.totalChunks;
+    if (done) task.status = "done";
+
+    return { chunkIndex, written: length, done, completedChunks: task.completedChunks, totalChunks: task.totalChunks };
+}
+
+function getCopyProgress(taskId) {
+    const task = chunkedTasks.get(taskId);
+    if (!task) throw new Error("任务不存在或已过期");
+    return {
+        taskId: task.taskId,
+        status: task.status,
+        totalSize: task.totalSize,
+        chunkSize: task.chunkSize,
+        totalChunks: task.totalChunks,
+        completedChunks: task.completedChunks,
+        transferred: task.completedChunks * task.chunkSize,
+    };
+}
+
+async function moveFile(source, target) {
+    if (!source || !target) throw new Error("源路径和目标路径不能为空");
+    if (!fsSync.existsSync(source)) throw new Error("源文件不存在");
+
+    try {
+        await fs.rename(source, target);
+        return { source, target, method: "rename" };
+    } catch (err) {
+        if (err.code === "EXDEV") {
+            const stat = await fs.stat(source);
+            if (stat.size > BIG_FILE_THRESHOLD) {
+                return { needChunked: true, size: stat.size };
+            }
+            await fs.copyFile(source, target);
+            await fs.unlink(source);
+            return { source, target, method: "copy-delete" };
+        }
+        throw err;
+    }
+}
+
+async function listDirRecursive(dirPath) {
+    const results = [];
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name);
+        if (entry.isDirectory()) {
+            const subFiles = await listDirRecursive(fullPath);
+            results.push(...subFiles);
+        } else {
+            const stat = await fs.stat(fullPath);
+            results.push({ path: fullPath, name: entry.name, size: stat.size, is_dir: false });
+        }
+    }
+    return results;
+}
+
+async function expandPaths(paths) {
+    const results = [];
+    for (const p of paths) {
+        const stat = await fs.stat(p).catch(() => null);
+        if (!stat) continue;
+        if (stat.isDirectory()) {
+            const subFiles = await listDirRecursive(p);
+            results.push(...subFiles.map((f) => ({
+                ...f,
+                relativePath: path.relative(path.dirname(p), f.path),
+            })));
+        } else {
+            results.push({
+                path: p,
+                name: path.basename(p),
+                size: stat.size,
+                is_dir: false,
+                relativePath: path.basename(p),
+            });
+        }
+    }
+    return results;
+}
+
 module.exports = {
     getFileList,
     readTextFile,
     deletePath,
     renameByRegex,
+    copyFile,
+    startChunkedCopy,
+    copyChunk,
+    getCopyProgress,
+    moveFile,
+    listDirRecursive,
+    expandPaths,
 };

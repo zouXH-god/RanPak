@@ -43,7 +43,7 @@ class AliDnsProvider {
         return recordList(
             items.map((item) => domainRecord({
                 domain,
-                rr: item.rr,
+                rr: item.RR || item.rr || "",
                 record_id: item.recordId,
                 type: item.type,
                 value: item.value,

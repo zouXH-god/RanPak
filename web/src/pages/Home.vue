@@ -2,12 +2,17 @@
 import { computed, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import * as Icons from '@element-plus/icons-vue'
-import { House, Search } from '@element-plus/icons-vue'
+import { House, Search, Star, StarFilled } from '@element-plus/icons-vue'
 import mascotUrl from '../static/images/home-mascot.png'
-import { featureGroups, filterFeatureGroups } from '../data/features'
+import { featureGroupsWithFavorites, filterFeatureGroups } from '../data/features'
+import { useFavorites } from '../composables/useFavorites'
+import { useFeatureVisibility } from '../composables/useFeatureVisibility'
 
 const searchText = ref('')
-const visibleFeatureGroups = computed(() => searchText.value.trim() ? filterFeatureGroups(searchText.value) : featureGroups)
+const { favoriteKeySet, isFavorite, toggleFavorite } = useFavorites()
+const { hiddenSet } = useFeatureVisibility()
+const allFeatureGroups = computed(() => featureGroupsWithFavorites(favoriteKeySet.value, hiddenSet.value))
+const visibleFeatureGroups = computed(() => searchText.value.trim() ? filterFeatureGroups(searchText.value, allFeatureGroups.value) : allFeatureGroups.value)
 </script>
 
 <template>
@@ -60,15 +65,33 @@ const visibleFeatureGroups = computed(() => searchText.value.trim() ? filterFeat
             <span>{{ group.items.length }} 项</span>
           </div>
           <div class="feature-grid">
-            <RouterLink v-for="item in group.items" :key="item.label" class="feature-card" :to="item.to">
-              <span class="feature-icon">
-                <el-icon><component :is="Icons[item.icon]" /></el-icon>
-              </span>
-              <span class="feature-text">
-                <strong>{{ item.label }}</strong>
-                <small>{{ item.description }}</small>
-              </span>
-            </RouterLink>
+            <div v-for="item in group.items" :key="`${group.key}-${item.label}`" class="feature-card">
+              <RouterLink class="feature-card-link" :to="item.to">
+                <span class="feature-icon">
+                  <el-icon><component :is="Icons[item.icon]" /></el-icon>
+                </span>
+                <span class="feature-text">
+                  <strong>{{ item.label }}</strong>
+                  <small>{{ item.description }}</small>
+                </span>
+              </RouterLink>
+              <button
+                type="button"
+                class="feature-favorite"
+                :class="isFavorite(item) ? 'is-favorite' : ''"
+                :aria-label="isFavorite(item) ? `取消收藏 ${item.label}` : `收藏 ${item.label}`"
+                :title="isFavorite(item) ? '取消收藏' : '收藏'"
+                @click="toggleFavorite(item)"
+              >
+                <el-icon>
+                  <StarFilled v-if="isFavorite(item)" />
+                  <Star v-else />
+                </el-icon>
+              </button>
+            </div>
+            <div v-if="group.key === 'favorites' && group.items.length === 0" class="empty-favorites">
+              点击栏目右侧星标后会显示在这里
+            </div>
           </div>
         </section>
         <div v-if="searchText && visibleFeatureGroups.length === 0" class="empty-search">
@@ -334,13 +357,11 @@ const visibleFeatureGroups = computed(() => searchText.value.trim() ? filterFeat
 }
 
 .feature-card {
+  position: relative;
   display: flex;
   min-height: 5.25rem;
-  align-items: flex-start;
-  gap: 0.8rem;
   border: 1px solid rgba(226, 232, 240, 0.78);
   border-radius: 0.9rem;
-  padding: 0.85rem;
   color: inherit;
   background: rgba(255, 255, 255, 0.7);
   transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
@@ -351,6 +372,52 @@ const visibleFeatureGroups = computed(() => searchText.value.trim() ? filterFeat
   border-color: rgba(255, 124, 171, 0.42);
   background: rgba(255, 255, 255, 0.92);
   box-shadow: 0 16px 30px rgba(77, 111, 130, 0.14);
+}
+
+.feature-card-link {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: flex-start;
+  gap: 0.8rem;
+  padding: 0.85rem 2.85rem 0.85rem 0.85rem;
+  color: inherit;
+}
+
+.feature-favorite {
+  position: absolute;
+  top: 0.65rem;
+  right: 0.65rem;
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  color: #cbd5e1;
+  background: rgba(255, 255, 255, 0.72);
+  transition: color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+
+.feature-favorite:hover {
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  transform: scale(1.05);
+}
+
+.feature-favorite.is-favorite {
+  color: #f59e0b;
+}
+
+.empty-favorites {
+  grid-column: 1 / -1;
+  border: 1px dashed rgba(245, 158, 11, 0.38);
+  border-radius: 0.9rem;
+  padding: 1.25rem;
+  text-align: center;
+  color: #94a3b8;
+  background: rgba(255, 251, 235, 0.42);
 }
 
 .feature-icon {
@@ -407,6 +474,12 @@ const visibleFeatureGroups = computed(() => searchText.value.trim() ? filterFeat
   color: #475569;
   background: #f1f5f9;
   box-shadow: 0 10px 20px rgba(100, 116, 139, 0.12);
+}
+
+.tone-amber .feature-icon {
+  color: #b45309;
+  background: #fffbeb;
+  box-shadow: 0 10px 20px rgba(245, 158, 11, 0.14);
 }
 
 @keyframes mascotFloat {

@@ -43,6 +43,11 @@ const TimerDisplayWindow = () => import('../pages/TimerDisplayWindow.vue')
 const Clicker = () => import('../pages/Clicker.vue')
 const TaskFlow = () => import('../pages/TaskFlow.vue')
 const TaskFlowOverlay = () => import('../pages/TaskFlowOverlay.vue')
+const FinalShellActive = () => import('../pages/FinalShellActive.vue')
+const MemeMaker = () => import('../pages/MemeMaker.vue')
+const ImageViewerWindow = () => import('../pages/ImageViewerWindow.vue')
+const CloudManagement = () => import('../pages/CloudManagement.vue')
+const NovelReader = () => import('../pages/NovelReader.vue')
 
 export default createRouter({
   history: createWebHistory(),
@@ -75,6 +80,7 @@ export default createRouter({
     { path: '/text-to-image', name: 'textToImage', component: TextToImage, meta: { title: '文本转图片' } },
     { path: '/badge-print', name: 'badgePrint', component: BadgePrint, meta: { title: '吧唧打印' } },
     { path: '/perler-beads', name: 'perlerBeads', component: PerlerBeads, meta: { title: '拼豆工具' } },
+    { path: '/meme-maker', name: 'memeMaker', component: MemeMaker, meta: { title: '表情包制作' } },
     { path: '/video-tools', name: 'videoTools', component: VideoTools, meta: { title: '视频工具' } },
     { path: '/child-window', name: 'childWindowConfig', component: ClockWindow, meta: { title: '子窗口配置' } },
     { path: '/child-window-clock', name: 'childWindowClock', component: ClockWindow, meta: { title: '时钟' } },
@@ -93,12 +99,16 @@ export default createRouter({
     { path: '/preview-child-window', name: 'previewChildWindow', component: OverlayChildWindow, meta: { title: '桌面部件预览', overlay: true } },
     { path: '/reminder-window', name: 'reminderWindow', component: ReminderWindow, meta: { title: '提醒', overlay: true } },
     { path: '/timer-display-window', name: 'timerDisplayWindow', component: TimerDisplayWindow, meta: { title: '定时器展示', overlay: true } },
+    { path: '/finalshell-active', name: 'finalshellActive', component: FinalShellActive, meta: { title: 'FinalShell Active' } },
     { path: '/task-flow', name: 'taskFlow', component: TaskFlow, meta: { title: '任务流助手' } },
     { path: '/task-flow-overlay', name: 'taskFlowOverlay', component: TaskFlowOverlay, meta: { title: '任务流', overlay: true } },
+    { path: '/image-viewer', name: 'imageViewer', component: ImageViewerWindow, meta: { title: '图片查看', overlay: true } },
     { path: '/clicker', name: 'clicker', component: Clicker, meta: { title: '模拟点击' } },
     { path: '/standups', name: 'standups', component: Standups, meta: { title: 'Standups' } },
     { path: '/calendar', name: 'calendar', component: Calendar, meta: { title: 'My Calendar' } },
     { path: '/settings', name: 'settings', component: Settings, meta: { title: 'Settings' } },
+    { path: '/cloud-management', name: 'cloudManagement', component: CloudManagement, meta: { title: '云端管理' } },
+    { path: '/novel-reader', name: 'novelReader', component: NovelReader, meta: { title: '小说阅读器' } },
     { path: '/:pathMatch(.*)*', redirect: '/home' },
   ]
 })

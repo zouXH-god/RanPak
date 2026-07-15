@@ -1,0 +1,12 @@
+{
+  "id": "kvm-manager",
+  "name": "KVM 虚拟机",
+  "version": "1.0.0",
+  "description": "基于 virsh 的 KVM/libvirt 虚拟机管理，支持虚拟机生命周期、快照、存储池、虚拟网络",
+  "icon": "svg:<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='2' y='3' width='20' height='14' rx='2'/><path d='M8 21h8'/><path d='M12 17v4'/><path d='M7 8h2v2H7z'/><path d='M15 8h2v2h-2z'/><path d='M11 8h2v2h-2z'/></svg>",
+  "author": "ran-pak",
+  "minAppVersion": "1.0.0",
+  "entry": "component.js",
+  "style": "style.css",
+  "capabilities": ["exec"]
+}

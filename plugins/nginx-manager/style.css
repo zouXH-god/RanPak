@@ -1,0 +1,48 @@
+.nginx-manager { min-height: 300px; }
+.nginx-manager .mgr-card { background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px 16px; }
+.nginx-manager .mgr-card-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 10px; }
+.nginx-manager .install-log-panel { padding: 8px; }
+.nginx-manager .install-log { background: #0f172a; color: #e5e7eb; border-radius: 8px; padding: 12px; max-height: 400px; overflow-y: auto; font-family: Consolas, monospace; font-size: 12px; }
+.nginx-manager .install-log pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
+.nginx-manager .log-view { background: #0f172a; color: #e5e7eb; border-radius: 8px; padding: 12px; max-height: 400px; overflow-y: auto; font-family: Consolas, monospace; font-size: 12px; scroll-behavior: smooth; }
+.nginx-manager .log-view.log-view-tall { max-height: 500px; }
+.nginx-manager .log-view pre { margin: 0; white-space: pre-wrap; word-break: break-all; }
+.nginx-manager .nginx-editor textarea { font-family: Consolas, "Cascadia Mono", monospace; font-size: 13px; line-height: 1.6; }
+.nginx-manager .cert-detail-grid { display: flex; flex-direction: column; gap: 0; }
+.nginx-manager .cert-row { display: flex; gap: 12px; padding: 8px 4px; border-bottom: 1px solid #f0f0f0; align-items: flex-start; }
+.nginx-manager .cert-row:last-child { border-bottom: none; }
+.nginx-manager .cert-label { width: 80px; flex-shrink: 0; font-size: 12px; color: #8b8b8b; font-weight: 500; }
+.nginx-manager .cert-val { flex: 1; font-size: 13px; color: #333; word-break: break-all; }
+.nginx-manager .cert-domain-tag { margin: 2px 4px 2px 0; }
+.nginx-manager .cert-file-actions { display: inline-flex; gap: 4px; margin-left: 8px; }
+.nginx-manager .dir-picker { display: inline-flex; align-items: center; gap: 0; }
+.nginx-manager .dir-picker-input { width: 260px; }
+.nginx-manager .dir-picker-input .el-input__wrapper { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.nginx-manager .dir-picker-btn { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; }
+.nginx-manager .dir-browser-path { margin-bottom: 8px; }
+.nginx-manager .dir-browser-list { border: 1px solid #e5e7eb; border-radius: 8px; max-height: 360px; overflow-y: auto; }
+.nginx-manager .dir-browser-item { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer; font-size: 13px; border-bottom: 1px solid #f5f5f5; transition: background .15s; }
+.nginx-manager .dir-browser-item:last-child { border-bottom: none; }
+.nginx-manager .dir-browser-item:hover { background: #f0f7ff; }
+.nginx-manager .dir-browser-item.is-selected { background: #e6f0ff; }
+.nginx-manager .dir-browser-parent { color: #888; font-style: italic; }
+.nginx-manager .dir-browser-item.is-dir { font-weight: 500; }
+.nginx-manager .new-site-form { background: #f9fafb; border-radius: 8px; padding: 16px 16px 4px; border: 1px solid #eee; }
+.nginx-manager .loc-blocks-header { display: flex; align-items: center; justify-content: space-between; margin: 6px 0 6px; }
+.nginx-manager .loc-block-card { border: 1px solid #e5e7eb; border-radius: 6px; margin-bottom: 8px; overflow: hidden; background: #fff; }
+.nginx-manager .loc-block-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; user-select: none; background: #fafbfc; border-bottom: 1px solid #f0f0f0; transition: background .15s; }
+.nginx-manager .loc-block-head:hover { background: #f0f5ff; }
+.nginx-manager .loc-block-arrow { transition: transform .2s; transform: rotate(-90deg); font-size: 12px; color: #999; }
+.nginx-manager .loc-block-arrow.is-collapsed { transform: rotate(-180deg); }
+.nginx-manager .loc-block-path { font-size: 12px; color: #606266; background: #f4f4f5; padding: 1px 6px; border-radius: 3px; }
+.nginx-manager .loc-block-body { padding: 12px 12px 4px; }
+.nginx-manager .loc-block-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+.nginx-manager .loc-block-grid .grid-full { grid-column: 1 / -1; }
+.nginx-manager .advanced-opts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+.nginx-manager .advanced-opts-grid .grid-full,
+.nginx-manager .advanced-opts-grid .el-form-item:last-child { grid-column: 1 / -1; }
+.nginx-manager .server-opts-collapse.el-collapse { border: none; margin-top: 4px; }
+.nginx-manager .server-opts-collapse .el-collapse-item__header { height: 32px; font-size: 12px; background: transparent; border: none; }
+.nginx-manager .server-opts-collapse .el-collapse-item__wrap { border: none; }
+.nginx-manager .server-opts-collapse .el-collapse-item__content { padding-bottom: 0; }
+.nginx-manager .nginx-not-installed { padding: 20px 0; }

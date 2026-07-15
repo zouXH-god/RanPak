@@ -1,0 +1,72 @@
+.systemd-manager {
+  min-height: 300px;
+}
+
+.systemd-manager .mgr-card {
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.systemd-manager .mgr-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 10px;
+}
+
+.systemd-manager .service-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.systemd-manager .dot-active {
+  background: #22c55e;
+  box-shadow: 0 0 4px #22c55e88;
+}
+
+.systemd-manager .dot-inactive {
+  background: #94a3b8;
+}
+
+.systemd-manager .dot-failed {
+  background: #ef4444;
+  box-shadow: 0 0 4px #ef444488;
+}
+
+.systemd-manager .dot-activating,
+.systemd-manager .dot-deactivating {
+  background: #f59e0b;
+}
+
+.systemd-manager .log-view {
+  background: #0f172a;
+  color: #e5e7eb;
+  border-radius: 8px;
+  padding: 12px;
+  max-height: 400px;
+  overflow-y: auto;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+  scroll-behavior: smooth;
+}
+
+.systemd-manager .log-view.log-view-tall {
+  max-height: 500px;
+}
+
+.systemd-manager .log-view pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.systemd-manager .unit-editor textarea {
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}

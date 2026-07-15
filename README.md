@@ -98,7 +98,11 @@ ran-pak/
 │   │   ├── dns/                 # DNS provider 适配层
 │   │   ├── files/               # 文件管理服务
 │   │   ├── image/               # 图片处理服务
+│   │   ├── ssh/                 # SSH 工具和插件管理
+│   │   │   ├── index.js         # SSH 连接管理
+│   │   │   └── plugin-manager.js # 插件扫描、安装、卸载
 │   │   └── video/               # 视频任务与 FFmpeg 调用
+│   ├── bundled-plugins/         # 打包时复制的内置插件
 │   └── web-dist/                # 打包时复制的前端构建产物
 │
 ├── web/                         # Vue 前端项目
@@ -112,6 +116,12 @@ ran-pak/
 │       ├── router/
 │       ├── static/
 │       └── utils/
+│
+├── plugins/                     # SSH 插件源码（默认插件）
+│   ├── docker-manager/
+│   ├── nginx-manager/
+│   ├── systemd-manager/
+│   └── kvm-manager/
 │
 ├── docs/                        # 设计、构建和问题记录
 ├── scripts/
@@ -401,6 +411,70 @@ app/config/dns.yaml
 ```
 
 不同 DNS 服务商的能力并不完全一致。例如 GoDaddy 官方 API 不提供记录启停状态，前端会按“不支持状态切换”处理。
+
+## SSH 工具插件系统
+
+SSH 工具支持通过插件扩展功能。每个插件是一个独立目录，包含元信息、Vue 组件和样式，不参与主项目编译，在运行时由沙箱动态加载。
+
+### 插件结构
+
+```text
+plugins/your-plugin/
+├── manifest.json     # 元信息：id、名称、版本、描述、图标
+├── component.js      # Vue 组件入口（template 字符串 + setup 函数）
+└── style.css         # 可选样式
+```
+
+### manifest.json
+
+```json
+{
+  "id": "your-plugin",
+  "name": "插件名称",
+  "version": "1.0.0",
+  "description": "功能描述",
+  "icon": "svg:<svg viewBox='0 0 24 24' ...>...</svg>",
+  "author": "作者",
+  "minAppVersion": "1.0.0",
+  "entry": "component.js",
+  "style": "style.css",
+  "capabilities": ["exec"]
+}
+```
+
+### component.js
+
+组件代码通过 `new Function()` 在沙箱中执行。Vue、Composition API、Element Plus Icons 和 `useRemoteConfig` 作为参数注入，不需要 `import`。
+
+组件接收三个 Props：
+
+- `profileId` — 当前 SSH 连接 ID。
+- `exec(cmd)` — 在远程服务器执行 shell 命令，返回 `{code, stdout, stderr}`。
+- `callSsh(action, ...args)` — 调用 SSH 扩展 API。
+
+Element Plus 已全局注册，`<el-button>` / `<el-table>` 等可直接在 template 中使用。
+
+### 默认插件
+
+应用内置以下默认插件，位于 `plugins/` 目录，打包时复制到 `app/bundled-plugins/`，首次启动自动同步到用户数据目录：
+
+| 插件 | 功能 |
+| --- | --- |
+| docker-manager | Docker 容器、镜像、网络、卷管理 |
+| nginx-manager | Nginx 站点、SSL 证书、日志管理 |
+| systemd-manager | Systemd 服务管理 |
+| kvm-manager | KVM/libvirt 虚拟机管理 |
+
+### 安装与管理
+
+- 应用内 SSH 工具的"插件"选项卡提供插件市场。
+- 支持从本地 `.zip` 文件安装。
+- 支持从远程注册表 URL 安装。
+- 在插件市场中可启用、禁用或卸载插件。
+
+### 开发插件
+
+详细的插件开发规范见 `.cursor/skills/ssh-plugin-dev/SKILL.md`，涵盖沙箱 API、Props 契约、图标使用、消息提示、远程配置持久化等完整开发细节。
 
 ## 开发约定
 

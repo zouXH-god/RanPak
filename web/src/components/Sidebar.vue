@@ -37,7 +37,19 @@
           </el-icon>
         </button>
         <div v-if="isGroupOpen(group.key)" class="ml-6 space-y-1">
-          <SidebarItem v-for="item in group.items" :key="item.label" :icon="item.icon" :label="item.label" :to="item.to" />
+          <SidebarItem
+            v-for="item in group.items"
+            :key="`${group.key}-${item.label}`"
+            :icon="item.icon"
+            :label="item.label"
+            :to="item.to"
+            :favorite-item="item"
+            :is-favorite="isFavorite(item)"
+            @toggle-favorite="toggleFavorite"
+          />
+          <div v-if="group.key === 'favorites' && group.items.length === 0" class="px-3 py-2 text-xs text-gray-400">
+            暂无收藏
+          </div>
         </div>
       </template>
       <div v-if="searchText && visibleGroups.length === 0" class="px-3 py-8 text-center text-xs text-gray-400">
@@ -54,14 +66,19 @@ import { useRoute } from 'vue-router'
 import * as Icons from '@element-plus/icons-vue'
 import { ArrowRight, Search } from '@element-plus/icons-vue'
 import SidebarItem from './SidebarItem.vue'
-import { featureGroups, filterFeatureGroups, isGroupActive } from '../data/features'
+import { featureGroups, featureGroupsWithFavorites, filterFeatureGroups, isGroupActive } from '../data/features'
+import { useFavorites } from '../composables/useFavorites'
+import { useFeatureVisibility } from '../composables/useFeatureVisibility'
 import appIconUrl from '../static/images/app-icon.png'
 
 const route = useRoute()
 const searchText = ref('')
 const openGroup = ref('image')
+const { favoriteKeySet, isFavorite, toggleFavorite } = useFavorites()
+const { hiddenSet } = useFeatureVisibility()
 
-const visibleGroups = computed(() => searchText.value.trim() ? filterFeatureGroups(searchText.value) : featureGroups)
+const allGroups = computed(() => featureGroupsWithFavorites(favoriteKeySet.value, hiddenSet.value))
+const visibleGroups = computed(() => searchText.value.trim() ? filterFeatureGroups(searchText.value, allGroups.value) : allGroups.value)
 
 watch(() => route.fullPath, () => {
   const activeGroup = featureGroups.find((group) => isGroupActive(group, route))

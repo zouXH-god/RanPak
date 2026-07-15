@@ -1,0 +1,10 @@
+{
+  "dependencies": {
+    "archiver": "^8.0.0",
+    "cheerio": "^1.2.0",
+    "extract-zip": "^2.0.1",
+    "jsonpath-plus": "^10.4.0",
+    "node-7z": "^3.0.0",
+    "tar": "^7.5.19"
+  }
+}
