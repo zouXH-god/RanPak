@@ -1586,18 +1586,39 @@ class SshRuntime {
 
     exportProfilesForSync() {
         const store = this.readStore();
-        return store.profiles.map((p) => {
+        const folders = (store.folders || []).map((folder) => ({
+            ...folder,
+            _syncType: "folder",
+        }));
+        const profiles = store.profiles.map((p) => {
             const { secrets, ...rest } = p;
-            return rest;
+            return { ...rest, _syncType: "profile" };
         });
+        return [...folders, ...profiles];
     }
 
     importProfilesFromSync(data) {
-        if (!Array.isArray(data)) return;
+        if (!Array.isArray(data)) throw new Error("SSH 云端数据格式错误：应为连接与文件夹记录数组");
         const store = this.readStore();
+        const incomingFolders = data.filter((item) => item?._syncType === "folder");
+        const incomingProfiles = data.filter((item) => item?._syncType !== "folder");
+
+        const folderIndex = new Map(store.folders.map((folder) => [folder.id, folder]));
+        for (const incoming of incomingFolders) {
+            if (!incoming.id) continue;
+            const { _syncType, ...folder } = incoming;
+            const existing = folderIndex.get(folder.id);
+            if (!existing) {
+                store.folders.push(folder);
+            } else if (new Date(folder.updatedAt || 0).getTime() > new Date(existing.updatedAt || 0).getTime()) {
+                Object.assign(existing, folder);
+            }
+        }
+
         const existingIndex = new Map(store.profiles.map((p) => [p.id, p]));
 
-        for (const incoming of data) {
+        for (const rawIncoming of incomingProfiles) {
+            const { _syncType, ...incoming } = rawIncoming || {};
             if (!incoming.id) continue;
             const existing = existingIndex.get(incoming.id);
             if (!existing) {

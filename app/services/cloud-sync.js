@@ -213,6 +213,36 @@ async function writeRemoteData(type, rawData, errorPrefix) {
     return parsed;
 }
 
+function comparableData(value) {
+    if (Array.isArray(value)) {
+        return value.map(comparableData).sort((a, b) => {
+            const aKey = String(a?.id || JSON.stringify(a));
+            const bKey = String(b?.id || JSON.stringify(b));
+            return aKey.localeCompare(bKey);
+        });
+    }
+    if (value && typeof value === "object") {
+        return Object.keys(value).sort().reduce((result, key) => {
+            if (key !== "_updatedAt" && key !== "_syncType") result[key] = comparableData(value[key]);
+            return result;
+        }, {});
+    }
+    return value;
+}
+
+function dataEquals(left, right) {
+    return JSON.stringify(comparableData(left)) === JSON.stringify(comparableData(right));
+}
+
+function dataContains(local, remote) {
+    if (!Array.isArray(remote)) return dataEquals(local, remote);
+    if (!Array.isArray(local)) return false;
+    const localItems = local.map(comparableData);
+    return remote.map(comparableData).every((remoteItem) =>
+        localItems.some((localItem) => JSON.stringify(localItem) === JSON.stringify(remoteItem))
+    );
+}
+
 async function pullDataType(type) {
     if (!isLoggedIn()) return null;
 
@@ -267,12 +297,16 @@ async function syncAll() {
             try {
                 const remote = remoteData[type];
                 if (remote && remote.data != null && remote.data !== "") {
-                    const localBefore = JSON.stringify(DATA_TYPE_READERS[type]());
+                    const parsedRemote = typeof remote.data === "string" ? JSON.parse(remote.data) : remote.data;
+                    const localBefore = DATA_TYPE_READERS[type]();
                     _syncVersions[type] = Number(remote.version || 0);
                     _lastRemoteUpdatedAt[type] = Number(remote.updatedAt || 0);
                     await writeRemoteData(type, remote.data, "全量拉取写回失败");
-                    const localAfter = JSON.stringify(DATA_TYPE_READERS[type]());
-                    if (localBefore === localAfter) summary.unchanged.push(type);
+                    const localAfter = DATA_TYPE_READERS[type]();
+                    if (!dataContains(localAfter, parsedRemote)) {
+                        throw new Error(`云端数据写入后校验失败(${type})：本地存储内容与云端不一致`);
+                    }
+                    if (dataEquals(localBefore, localAfter)) summary.unchanged.push(type);
                     else summary.pulled.push(type);
                 } else {
                     _syncVersions[type] = 0;
