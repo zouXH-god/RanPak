@@ -34,6 +34,21 @@ jobs:
         working-directory: app
         run: npm ci
 
+      - name: Set application version from tag
+        working-directory: app
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -notmatch '^v(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') {
+            throw "Release tag must use vX.Y.Z format: $tag"
+          }
+          $version = $Matches.version
+          npm version $version --no-git-tag-version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to set application version to $version"
+          }
+          Write-Host "Packaging RanPak version $version"
+
       - name: Build Windows exe
         shell: pwsh
         env:
