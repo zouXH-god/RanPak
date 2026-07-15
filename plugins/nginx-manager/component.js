@@ -612,6 +612,10 @@ ctx.exports = {
       return await props.exec(cmd)
     }
 
+    function shellQuote(value) {
+      return "'" + String(value ?? '').replace(/'/g, "'\"'\"'") + "'"
+    }
+
     async function checkNginx() {
       const r = await exec('which nginx 2>/dev/null')
       installed.value = r.code === 0 && r.stdout.trim() !== ''
@@ -655,9 +659,9 @@ ctx.exports = {
     }
 
     async function expandIncludePattern(pattern) {
-      const r = await exec('ls -1 ' + pattern + ' 2>/dev/null')
+      const r = await exec('sudo ls -1 ' + pattern + ' 2>/dev/null')
       if (r.code !== 0 || !r.stdout.trim()) return []
-      return r.stdout.trim().split('\n').filter(Boolean)
+      return r.stdout.trim().split('\n').map((item) => item.trim()).filter(Boolean)
     }
 
     async function loadSitesAuto() {
@@ -686,15 +690,20 @@ ctx.exports = {
         for (const pattern of includes) {
           const files = await expandIncludePattern(pattern)
           const patDir = pattern.substring(0, pattern.lastIndexOf('/'))
-          if (patDir) seenDirs.add(patDir)
+          const isSitePattern = /[*?\[]/.test(pattern) && !/modules-(?:available|enabled)/.test(pattern)
+          if (patDir && isSitePattern) seenDirs.add(patDir)
 
           for (const fp of files) {
+            if (!fp.endsWith('.conf') && !/sites-(?:available|enabled)/.test(fp)) continue
             const dir = fp.substring(0, fp.lastIndexOf('/'))
             const name = fp.substring(fp.lastIndexOf('/') + 1)
             result.push({ name, dir, fullPath: fp, source: patDir || 'include' })
           }
         }
-        parsedIncludes.value = [...seenDirs]
+        parsedIncludes.value = [...seenDirs].sort((a, b) => {
+          const score = (dir) => dir.includes('/conf.d') ? 0 : dir.includes('/sites-enabled') ? 1 : 2
+          return score(a) - score(b)
+        })
       }
 
       if (customSiteDir.value.trim()) {
@@ -905,6 +914,7 @@ ctx.exports = {
     }
 
     function siteDir() {
+      if (customSiteDir.value.trim()) return customSiteDir.value.trim().replace(/\/+$/, '')
       if (customSiteDirActive.value && currentSiteDir.value) return currentSiteDir.value
       if (parsedIncludes.value.length) return parsedIncludes.value[0]
       return useConfD.value ? '/etc/nginx/conf.d' : '/etc/nginx/sites-available'
@@ -1113,16 +1123,37 @@ ctx.exports = {
           return
         }
         if (!name.endsWith('.conf')) name += '.conf'
+        if (!/^[A-Za-z0-9._-]+$/.test(name) || name === '.' || name === '..') {
+          showMessage('文件名只能包含字母、数字、点、下划线和连字符', 'warning')
+          return
+        }
         targetPath = siteDir() + '/' + name
       }
       savingSite.value = true
-      const r = await exec("sudo tee '" + targetPath + "' > /dev/null <<'RANPAK_EOF'\n" + siteEditorContent.value + "\nRANPAK_EOF")
+      const targetDir = targetPath.substring(0, targetPath.lastIndexOf('/'))
+      const bytes = new TextEncoder().encode(siteEditorContent.value)
+      let binary = ''
+      for (const byte of bytes) binary += String.fromCharCode(byte)
+      const encoded = btoa(binary)
+      const command = 'sudo mkdir -p ' + shellQuote(targetDir)
+        + ' && printf %s ' + shellQuote(encoded)
+        + ' | base64 -d | sudo tee ' + shellQuote(targetPath) + ' > /dev/null'
+        + ' && sudo test -f ' + shellQuote(targetPath)
+      const r = await exec(command)
       savingSite.value = false
-      if (r.code !== 0) { showMessage('保存失败: ' + r.stderr, 'error'); return }
+      if (r.code !== 0) { showMessage('保存失败: ' + (r.stderr || r.stdout || '远程文件未写入'), 'error'); return }
       showMessage('已保存', 'success')
       siteEditorVisible.value = false
       currentEditingRow = null
       await loadSitesAuto()
+      if (!sites.value.some((site) => site.fullPath === targetPath)) {
+        sites.value.push({
+          name: targetPath.substring(targetPath.lastIndexOf('/') + 1),
+          dir: targetDir,
+          fullPath: targetPath,
+          source: '刚刚保存',
+        })
+      }
     }
 
     async function doTestAndSave() {
