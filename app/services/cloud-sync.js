@@ -186,6 +186,29 @@ async function fetchRemoteStatus() {
     return cloudRequest("GET", "/api/sync/status");
 }
 
+async function writeRemoteData(type, rawData, errorPrefix) {
+    const writer = DATA_TYPE_WRITERS[type];
+    if (!writer) throw new Error(`未注册的数据写入类型: ${type}`);
+
+    let parsed;
+    try {
+        parsed = typeof rawData === "string" ? JSON.parse(rawData) : rawData;
+    } catch (e) {
+        throw new Error(`${errorPrefix}(${type})：云端数据不是合法 JSON：${e.message}`);
+    }
+
+    _writingFromCloud = true;
+    try {
+        await Promise.resolve(writer(parsed));
+    } catch (e) {
+        throw new Error(`${errorPrefix}(${type})：${e.message}`);
+    } finally {
+        _writingFromCloud = false;
+    }
+    if (_onDataUpdated) _onDataUpdated(type, parsed);
+    return parsed;
+}
+
 async function pullDataType(type) {
     if (!isLoggedIn()) return null;
 
@@ -195,19 +218,7 @@ async function pullDataType(type) {
     _syncVersions[type] = result.version;
     _lastRemoteUpdatedAt[type] = result.updatedAt;
 
-    const writer = DATA_TYPE_WRITERS[type];
-    if (writer && result.data) {
-        try {
-            const parsed = JSON.parse(result.data);
-            _writingFromCloud = true;
-            writer(parsed);
-            _writingFromCloud = false;
-            if (_onDataUpdated) _onDataUpdated(type, parsed);
-        } catch (e) {
-            _writingFromCloud = false;
-            console.error(`[cloud-sync] 拉取写回失败(${type}):`, e.message);
-        }
-    }
+    await writeRemoteData(type, result.data, "拉取写回失败");
 
     return result;
 }
@@ -230,19 +241,7 @@ async function syncDataType(type) {
     _syncVersions[type] = result.version;
     _lastRemoteUpdatedAt[type] = result.updatedAt;
 
-    const writer = DATA_TYPE_WRITERS[type];
-    if (writer && result.data) {
-        try {
-            const mergedData = JSON.parse(result.data);
-            _writingFromCloud = true;
-            writer(mergedData);
-            _writingFromCloud = false;
-            if (_onDataUpdated) _onDataUpdated(type, mergedData);
-        } catch (e) {
-            _writingFromCloud = false;
-            console.error(`[cloud-sync] 写回本地数据失败(${type}):`, e.message);
-        }
-    }
+    if (result.data) await writeRemoteData(type, result.data, "合并写回失败");
 
     return result;
 }
@@ -253,17 +252,28 @@ async function syncAll() {
 
     const results = {};
     const types = Object.keys(DATA_TYPE_READERS);
+    const errors = [];
 
-    for (const type of types) {
-        try {
-            results[type] = await syncDataType(type);
-        } catch (e) {
-            results[type] = { error: e.message };
+    try {
+        // 手动同步优先拉取，避免新设备的空本地数据覆盖已有云端数据。
+        const remoteStatus = await fetchRemoteStatus() || {};
+        for (const type of types) {
+            try {
+                if (Number(remoteStatus[type] || 0) > 0 && DATA_TYPE_WRITERS[type]) {
+                    await pullDataType(type);
+                }
+                results[type] = await syncDataType(type);
+            } catch (e) {
+                results[type] = { error: e.message };
+                errors.push(`${type}: ${e.message}`);
+            }
         }
+        saveCloudConfig({ ...loadCloudConfig(), lastSyncAt: Date.now() });
+    } finally {
+        _syncInProgress = false;
     }
 
-    saveCloudConfig({ ...loadCloudConfig(), lastSyncAt: Date.now() });
-    _syncInProgress = false;
+    if (errors.length) throw new Error(`部分数据同步失败：${errors.join("；")}`);
     return results;
 }
 
