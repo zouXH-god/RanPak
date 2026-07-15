@@ -186,6 +186,10 @@ async function fetchRemoteStatus() {
     return cloudRequest("GET", "/api/sync/status");
 }
 
+async function fetchAllRemoteData() {
+    return cloudRequest("GET", "/api/sync/all");
+}
+
 async function writeRemoteData(type, rawData, errorPrefix) {
     const writer = DATA_TYPE_WRITERS[type];
     if (!writer) throw new Error(`未注册的数据写入类型: ${type}`);
@@ -247,22 +251,35 @@ async function syncDataType(type) {
 }
 
 async function syncAll() {
-    if (!isLoggedIn() || _syncInProgress) return;
+    if (!isLoggedIn()) throw new Error("未配置云端服务或未登录");
+    if (_syncInProgress) throw new Error("同步正在进行中，请稍候");
     _syncInProgress = true;
 
     const results = {};
     const types = Object.keys(DATA_TYPE_READERS);
     const errors = [];
+    const summary = { pulled: [], unchanged: [], remoteMissing: [], merged: [] };
 
     try {
-        // 手动同步优先拉取，避免新设备的空本地数据覆盖已有云端数据。
-        const remoteStatus = await fetchRemoteStatus() || {};
+        // 手动同步始终全量拉取，不依赖更新时间戳或增量状态。
+        const remoteData = await fetchAllRemoteData() || {};
         for (const type of types) {
             try {
-                if (Number(remoteStatus[type] || 0) > 0 && DATA_TYPE_WRITERS[type]) {
-                    await pullDataType(type);
+                const remote = remoteData[type];
+                if (remote && remote.data != null && remote.data !== "") {
+                    const localBefore = JSON.stringify(DATA_TYPE_READERS[type]());
+                    _syncVersions[type] = Number(remote.version || 0);
+                    _lastRemoteUpdatedAt[type] = Number(remote.updatedAt || 0);
+                    await writeRemoteData(type, remote.data, "全量拉取写回失败");
+                    const localAfter = JSON.stringify(DATA_TYPE_READERS[type]());
+                    if (localBefore === localAfter) summary.unchanged.push(type);
+                    else summary.pulled.push(type);
+                } else {
+                    _syncVersions[type] = 0;
+                    summary.remoteMissing.push(type);
                 }
                 results[type] = await syncDataType(type);
+                summary.merged.push(type);
             } catch (e) {
                 results[type] = { error: e.message };
                 errors.push(`${type}: ${e.message}`);
@@ -274,7 +291,7 @@ async function syncAll() {
     }
 
     if (errors.length) throw new Error(`部分数据同步失败：${errors.join("；")}`);
-    return results;
+    return { types: results, summary };
 }
 
 // 防抖同步（本地数据变更后触发上传）

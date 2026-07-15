@@ -198,9 +198,10 @@ async function syncNow() {
   const res = await window.electronAPI?.cloudSync?.syncNow?.()
   syncing.value = false
   if (res?.ok) {
-    ElMessage.success('同步完成')
+    const summary = res.data?.summary || {}
+    ElMessage.success(`全量同步完成：拉取更新 ${summary.pulled?.length || 0} 项，数据一致 ${summary.unchanged?.length || 0} 项`)
     await loadStatus()
-    if (res.data) cloudData.value = res.data
+    if (res.data?.types) cloudData.value = res.data.types
   } else {
     ElMessage.error(res?.error || '同步失败')
   }
