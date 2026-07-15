@@ -160,8 +160,14 @@ class SshRuntime {
                         .filter((item) => item?._syncType === "folder")
                         .map(({ _syncType, ...folder }) => folder),
                     profiles: parsed
-                        .filter((item) => item?._syncType !== "folder")
+                        .filter((item) => !item?._syncType || item?._syncType === "profile")
                         .map(({ _syncType, ...profile }) => profile),
+                    remoteImportSources: parsed
+                        .filter((item) => item?._syncType === "remoteImportSource")
+                        .map(({ _syncType, ...source }) => source),
+                    privates: parsed
+                        .filter((item) => item?._syncType === "private")
+                        .map(({ _syncType, ...key }) => key),
                 };
             }
             if (!parsed || typeof parsed !== "object") throw new Error("顶层内容必须是 JSON 对象或数组");
@@ -1613,16 +1619,44 @@ class SshRuntime {
         }));
         const profiles = store.profiles.map((p) => {
             const { secrets, ...rest } = p;
-            return { ...rest, _syncType: "profile" };
+            return {
+                ...rest,
+                password: this.decrypt(secrets?.password),
+                passphrase: this.decrypt(secrets?.passphrase),
+                jumpHosts: (p.jumpHosts || []).map((hop) => {
+                    const { secrets: hopSecrets, ...hopRest } = hop;
+                    return {
+                        ...hopRest,
+                        password: this.decrypt(hopSecrets?.password),
+                        passphrase: this.decrypt(hopSecrets?.passphrase),
+                    };
+                }),
+                _syncType: "profile",
+            };
         });
-        return [...folders, ...profiles];
+        const remoteImportSources = (store.remoteImportSources || []).map((source) => ({
+            ...source,
+            _syncType: "remoteImportSource",
+        }));
+        const privates = (store.privates || []).map((key) => ({
+            id: key.id,
+            name: key.name,
+            content: this.decrypt(key.content),
+            password: this.decrypt(key.password),
+            createdAt: key.createdAt,
+            updatedAt: key.updatedAt,
+            _syncType: "private",
+        }));
+        return [...folders, ...profiles, ...remoteImportSources, ...privates];
     }
 
     importProfilesFromSync(data) {
         if (!Array.isArray(data)) throw new Error("SSH 云端数据格式错误：应为连接与文件夹记录数组");
         const store = this.readStore();
         const incomingFolders = data.filter((item) => item?._syncType === "folder");
-        const incomingProfiles = data.filter((item) => item?._syncType !== "folder");
+        const incomingProfiles = data.filter((item) => !item?._syncType || item?._syncType === "profile");
+        const incomingSources = data.filter((item) => item?._syncType === "remoteImportSource");
+        const incomingPrivates = data.filter((item) => item?._syncType === "private");
 
         const folderIndex = new Map(store.folders.map((folder) => [folder.id, folder]));
         for (const incoming of incomingFolders) {
@@ -1639,17 +1673,66 @@ class SshRuntime {
         const existingIndex = new Map(store.profiles.map((p) => [p.id, p]));
 
         for (const rawIncoming of incomingProfiles) {
-            const { _syncType, ...incoming } = rawIncoming || {};
+            const { _syncType, password, passphrase, ...incoming } = rawIncoming || {};
             if (!incoming.id) continue;
             const existing = existingIndex.get(incoming.id);
+            const syncedProfile = {
+                ...incoming,
+                jumpHosts: (incoming.jumpHosts || []).map((hop, index) => {
+                    const currentHop = existing?.jumpHosts?.[index];
+                    const { password: hopPassword, passphrase: hopPassphrase, ...hopData } = hop || {};
+                    return {
+                        ...hopData,
+                        secrets: {
+                            password: hopPassword ? this.encrypt(hopPassword) : (currentHop?.secrets?.password || ""),
+                            passphrase: hopPassphrase ? this.encrypt(hopPassphrase) : (currentHop?.secrets?.passphrase || ""),
+                        },
+                    };
+                }),
+                secrets: {
+                    password: password ? this.encrypt(password) : (existing?.secrets?.password || ""),
+                    passphrase: passphrase ? this.encrypt(passphrase) : (existing?.secrets?.passphrase || ""),
+                },
+            };
             if (!existing) {
-                store.profiles.push(incoming);
+                store.profiles.push(syncedProfile);
             } else {
                 const incomingTime = new Date(incoming.updatedAt || 0).getTime();
                 const existingTime = new Date(existing.updatedAt || 0).getTime();
                 if (incomingTime > existingTime) {
-                    Object.assign(existing, incoming, { secrets: existing.secrets });
+                    Object.assign(existing, syncedProfile);
                 }
+            }
+        }
+
+        const sourceIndex = new Map(store.remoteImportSources.map((source) => [source.id, source]));
+        for (const rawIncoming of incomingSources) {
+            const { _syncType, ...incoming } = rawIncoming || {};
+            if (!incoming.id) continue;
+            const existing = sourceIndex.get(incoming.id);
+            if (!existing) {
+                store.remoteImportSources.push(incoming);
+            } else if (new Date(incoming.updatedAt || 0).getTime() > new Date(existing.updatedAt || 0).getTime()) {
+                Object.assign(existing, incoming);
+            }
+        }
+
+        const privateIndex = new Map(store.privates.map((key) => [key.id, key]));
+        for (const rawIncoming of incomingPrivates) {
+            const { _syncType, content, password, ...incoming } = rawIncoming || {};
+            if (!incoming.id || !content) continue;
+            const existing = privateIndex.get(incoming.id);
+            if (!existing) {
+                store.privates.push({
+                    ...incoming,
+                    content: this.encrypt(content),
+                    password: password ? this.encrypt(password) : "",
+                });
+            } else if (new Date(incoming.updatedAt || 0).getTime() > new Date(existing.updatedAt || 0).getTime()) {
+                Object.assign(existing, incoming, {
+                    content: this.encrypt(content),
+                    password: password ? this.encrypt(password) : "",
+                });
             }
         }
         this.writeStore(store);
