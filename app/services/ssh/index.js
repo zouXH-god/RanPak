@@ -146,7 +146,25 @@ class SshRuntime {
 
     readStore() {
         try {
-            const parsed = JSON.parse(fs.readFileSync(this.configPath, "utf-8")) || {};
+            const raw = fs.readFileSync(this.configPath, "utf-8").replace(/^\uFEFF/, "").trim();
+            let parsed = raw ? JSON.parse(raw) : {};
+
+            // 兼容云端响应包装、导出的 data 包装以及顶层同步记录数组。
+            if (parsed?.ssh_profiles?.data != null) parsed = parsed.ssh_profiles.data;
+            if (typeof parsed === "string") parsed = JSON.parse(parsed.replace(/^\uFEFF/, ""));
+            if (!Array.isArray(parsed) && parsed?.data != null && parsed.profiles == null) parsed = parsed.data;
+            if (typeof parsed === "string") parsed = JSON.parse(parsed.replace(/^\uFEFF/, ""));
+            if (Array.isArray(parsed)) {
+                parsed = {
+                    folders: parsed
+                        .filter((item) => item?._syncType === "folder")
+                        .map(({ _syncType, ...folder }) => folder),
+                    profiles: parsed
+                        .filter((item) => item?._syncType !== "folder")
+                        .map(({ _syncType, ...profile }) => profile),
+                };
+            }
+            if (!parsed || typeof parsed !== "object") throw new Error("顶层内容必须是 JSON 对象或数组");
             return {
                 ...parsed,
                 profiles: Array.isArray(parsed.profiles) ? parsed.profiles : [],
@@ -155,7 +173,10 @@ class SshRuntime {
                 privates: Array.isArray(parsed.privates) ? parsed.privates : [],
                 presetCommands: Array.isArray(parsed.presetCommands) ? parsed.presetCommands : [],
             };
-        } catch {
+        } catch (error) {
+            if (error?.code !== "ENOENT") {
+                throw new Error(`SSH 配置文件读取失败(${this.configPath})：${error.message}`);
+            }
             return { profiles: [], folders: [], remoteImportSources: [], privates: [], presetCommands: [] };
         }
     }
