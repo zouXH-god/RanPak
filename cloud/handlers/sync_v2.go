@@ -206,7 +206,39 @@ func SyncV2Status(c *gin.Context) {
 	database.DB.First(&state, "user_id=?", userID)
 	var maxSeq uint64
 	database.DB.Model(&models.SyncOperation{}).Where("user_id=?", userID).Select("COALESCE(MAX(seq),0)").Scan(&maxSeq)
-	c.JSON(200, gin.H{"code": 200, "data": gin.H{"protocolVersion": state.ProtocolVersion, "keyId": state.KeyID, "latestCursor": maxSeq}})
+	type overviewRow struct {
+		Category  string
+		Count     int64
+		UpdatedAt time.Time
+	}
+	var rows []overviewRow
+	database.DB.Raw(`
+		SELECT CASE
+			WHEN current.entity_type='app_config' AND current.entity_id='ai' THEN 'ai_config'
+			WHEN current.entity_type='ssh_profile' THEN 'ssh_profiles'
+			WHEN current.entity_type='ssh_history' THEN 'ssh_history'
+			WHEN current.entity_type='dns_account' THEN 'dns_accounts'
+		END AS category, COUNT(*) AS count, MAX(current.created_at) AS updated_at
+		FROM sync_operations current
+		JOIN (
+			SELECT entity_type, entity_id, MAX(seq) AS seq
+			FROM sync_operations WHERE user_id=? GROUP BY entity_type, entity_id
+		) latest ON latest.seq=current.seq
+		WHERE current.user_id=? AND current.deleted=0 AND (
+			(current.entity_type='app_config' AND current.entity_id='ai') OR
+			current.entity_type IN ('ssh_profile','ssh_history','dns_account')
+		) GROUP BY category`, userID, userID).Scan(&rows)
+	overview := map[string]gin.H{
+		"ai_config": {"count": int64(0), "updatedAt": int64(0)}, "ssh_profiles": {"count": int64(0), "updatedAt": int64(0)},
+		"ssh_history": {"count": int64(0), "updatedAt": int64(0)}, "dns_accounts": {"count": int64(0), "updatedAt": int64(0)},
+	}
+	for _, row := range rows {
+		overview[row.Category] = gin.H{"count": row.Count, "updatedAt": row.UpdatedAt.UnixMilli()}
+	}
+	var operationCount, deviceCount int64
+	database.DB.Model(&models.SyncOperation{}).Where("user_id=?", userID).Count(&operationCount)
+	database.DB.Model(&models.SyncDevice{}).Where("user_id=? AND revoked_at IS NULL", userID).Count(&deviceCount)
+	c.JSON(200, gin.H{"code": 200, "data": gin.H{"protocolVersion": state.ProtocolVersion, "keyId": state.KeyID, "latestCursor": maxSeq, "overview": overview, "operationCount": operationCount, "deviceCount": deviceCount}})
 }
 func ResetSyncV2(c *gin.Context) {
 	if _, ok := requireSyncV2Device(c, ""); !ok {

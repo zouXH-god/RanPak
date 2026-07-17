@@ -109,3 +109,43 @@ func TestRegistrationDoesNotActivateProtocolUntilBaselineCompletes(t *testing.T)
 		t.Fatal("activation did not switch protocol")
 	}
 }
+
+func TestSyncV2StatusReturnsLatestEntityOverview(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	initSyncV2TestDB(t)
+	now := time.Now()
+	token := "dddddddddddddddddddddddddddddddd"
+	database.DB.Create(&models.SyncDevice{UserID: 1, DeviceID: "device", KeyID: "key", TokenHash: deviceTokenHash(token), LastSeenAt: now})
+	database.DB.Create(&models.SyncAccountState{UserID: 1, ProtocolVersion: 2, KeyID: "key"})
+	rows := []models.SyncOperation{
+		{UserID: 1, OpID: "ssh-1", DeviceID: "device", EntityType: "ssh_profile", EntityID: "one", ContentHash: "a", Envelope: "{}"},
+		{UserID: 1, OpID: "ssh-2", DeviceID: "device", EntityType: "ssh_profile", EntityID: "two", ContentHash: "b", Envelope: "{}"},
+		{UserID: 1, OpID: "ssh-2-delete", DeviceID: "device", EntityType: "ssh_profile", EntityID: "two", ContentHash: "c", Deleted: true, Envelope: "{}"},
+		{UserID: 1, OpID: "dns-1", DeviceID: "device", EntityType: "dns_account", EntityID: "one", ContentHash: "d", Envelope: "{}"},
+		{UserID: 1, OpID: "ai-1", DeviceID: "device", EntityType: "app_config", EntityID: "ai", ContentHash: "e", Envelope: "{}"},
+	}
+	for i := range rows {
+		database.DB.Create(&rows[i])
+	}
+	req := httptest.NewRequest(http.MethodGet, "/status", nil)
+	req.Header.Set("X-RanPak-Device-ID", "device")
+	req.Header.Set("X-RanPak-Device-Token", token)
+	w := httptest.NewRecorder()
+	syncV2TestRouter(http.MethodGet, "/status", SyncV2Status).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status returned %d: %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Data struct {
+			Overview map[string]struct {
+				Count int64 `json:"count"`
+			} `json:"overview"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Data.Overview["ssh_profiles"].Count != 1 || response.Data.Overview["dns_accounts"].Count != 1 || response.Data.Overview["ai_config"].Count != 1 {
+		t.Fatalf("unexpected overview: %s", w.Body.String())
+	}
+}

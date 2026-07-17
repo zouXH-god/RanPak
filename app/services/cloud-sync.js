@@ -475,6 +475,35 @@ function getStatus() {
     };
 }
 
+async function refreshStatus() {
+    if (!isLoggedIn()) throw new Error('未配置云端服务或未登录');
+    const cryptoStatus = require('./sync-crypto').status();
+    let remote;
+    if (cryptoStatus.locked) {
+        const types = await fetchAllRemoteData() || {};
+        const overview = {};
+        for (const type of ['ai_config', 'ssh_profiles', 'ssh_history', 'dns_accounts']) {
+            const entry = types[type];
+            let count = 0;
+            try {
+                const value = typeof entry?.data === 'string' ? JSON.parse(entry.data) : entry?.data;
+                count = Array.isArray(value) ? value.length : value && Object.keys(value).length ? 1 : 0;
+            } catch { count = entry?.data ? 1 : 0; }
+            overview[type] = { count, updatedAt: Number(entry?.updatedAt || 0) };
+        }
+        remote = { protocolVersion: 1, overview };
+    } else remote = await require('./cloud-sync-v2').remoteStatus();
+    return { ...getStatus(), remote };
+}
+
+async function forcePullAll() {
+    if (!isLoggedIn()) throw new Error('未配置云端服务或未登录');
+    if (require('./sync-crypto').status().locked) throw new Error('强制同步仅支持已解锁的 v2 加密同步空间');
+    const result = await require('./cloud-sync-v2').forcePull();
+    saveCloudConfig({ ...loadCloudConfig(), lastSyncAt: Date.now() });
+    return result;
+}
+
 // --- 管理员 API ---
 
 async function getUsers() {
@@ -531,6 +560,8 @@ module.exports = {
     register,
     logout,
     getStatus,
+    refreshStatus,
+    forcePullAll,
     syncAll,
     syncDataType,
     pullDataType,

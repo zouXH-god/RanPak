@@ -221,6 +221,7 @@
             <h2 class="text-base font-semibold text-gray-900">云端同步</h2>
             <p class="mt-1 text-sm text-gray-500">将配置数据同步到云端服务，支持多设备间数据共享。</p>
           </div>
+          <el-button v-if="cloudLoggedIn" size="small" :loading="cloudRefreshing" @click="refreshCloudState(true)">刷新状态</el-button>
           <el-tag :type="cloudTagType" effect="plain">{{ cloudStatusLabel }}</el-tag>
         </div>
 
@@ -248,6 +249,7 @@
           <el-button size="small" @click="createRecoveryKey">创建并导出恢复密钥</el-button>
           <el-button size="small" @click="importRecoveryKey">导入恢复密钥</el-button>
           <el-button size="small" @click="loadSyncDetails">刷新设备与冲突</el-button>
+          <el-button size="small" type="danger" plain :loading="cloudForcing" @click="forceSync">强制同步并覆盖本机</el-button>
           <el-button size="small" type="danger" plain @click="resetSyncSpace">清空云端并重新初始化</el-button>
         </div>
         <div v-if="cloudLoggedIn && syncDevices.length" class="mb-4 rounded-md border border-gray-200 p-3 text-sm">
@@ -259,9 +261,17 @@
           </div>
         </div>
         <div v-if="cloudLoggedIn && syncConflicts.length" class="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
-          <h3 class="mb-2 font-semibold text-amber-800">待处理同步冲突</h3>
+          <div class="mb-2 flex flex-wrap items-center gap-2">
+            <el-checkbox :model-value="allConflictsSelected" :indeterminate="someConflictsSelected" @change="toggleAllConflicts">全选</el-checkbox>
+            <span class="font-semibold text-amber-800">待处理同步冲突（已选 {{ selectedConflictIds.length }} 条）</span>
+            <el-button size="small" :disabled="!selectedConflictIds.length" @click="batchResolveConflicts('local')">批量保留本机</el-button>
+            <el-button size="small" :disabled="!selectedConflictIds.length" @click="batchResolveConflicts('remote')">批量采用远端</el-button>
+          </div>
           <div v-for="item in syncConflicts" :key="item.id" class="border-t border-amber-200 py-2 first:border-0">
-            <div class="mb-2">{{ item.entity_type }} / {{ item.entity_id }}</div>
+            <div class="mb-2 flex items-center gap-2">
+              <el-checkbox :model-value="selectedConflictIds.includes(item.id)" @change="(checked) => toggleConflict(item.id, checked)" />
+              <span>{{ item.entity_type }} / {{ item.entity_id }}</span>
+            </div>
             <el-button size="small" @click="resolveSyncConflict(item, 'local')">保留本机</el-button>
             <el-button size="small" @click="resolveSyncConflict(item, 'remote')">采用远端</el-button>
             <el-button size="small" @click="mergeSyncConflict(item)">手工合并</el-button>
@@ -437,8 +447,13 @@ const cloudStatus = reactive({ loggedIn: false, username: '', role: '', lastSync
 const cloudLoggedIn = computed(() => cloudStatus.loggedIn)
 const cloudLoading = ref(false)
 const cloudSyncing = ref(false)
+const cloudRefreshing = ref(false)
+const cloudForcing = ref(false)
 const syncDevices = ref([])
 const syncConflicts = ref([])
+const selectedConflictIds = ref([])
+const allConflictsSelected = computed(() => syncConflicts.value.length > 0 && selectedConflictIds.value.length === syncConflicts.value.length)
+const someConflictsSelected = computed(() => selectedConflictIds.value.length > 0 && !allConflictsSelected.value)
 const cloudStatusLabel = computed(() => cloudLoggedIn.value ? '已连接' : '未连接')
 const cloudTagType = computed(() => cloudLoggedIn.value ? 'success' : 'info')
 
@@ -606,6 +621,19 @@ async function loadCloudStatus() {
   }
 }
 
+async function refreshCloudState(showMessage = false) {
+  cloudRefreshing.value = true
+  const res = await window.electronAPI?.cloudSync?.refreshStatus?.()
+  cloudRefreshing.value = false
+  if (res?.ok && res.data) {
+    Object.assign(cloudStatus, res.data)
+    if (res.data.url) cloudForm.url = res.data.url
+    if (res.data.username) cloudForm.username = res.data.username
+    if (!res.data.locked) await loadSyncDetails()
+    if (showMessage) ElMessage.success('云端同步状态已刷新')
+  } else if (showMessage) ElMessage.error(res?.error || '刷新失败')
+}
+
 async function createRecoveryKey() {
   const res = await window.electronAPI?.cloudSync?.createRecoveryKey?.()
   if (res?.ok) { ElMessage.success('恢复密钥已保存，请妥善离线备份'); await loadCloudStatus() }
@@ -619,7 +647,33 @@ async function importRecoveryKey() {
 async function loadSyncDetails() {
   const [devices, conflicts] = await Promise.all([window.electronAPI?.cloudSync?.listDevices?.(), window.electronAPI?.cloudSync?.listConflicts?.()])
   if (devices?.ok) syncDevices.value = devices.data || []
-  if (conflicts?.ok) syncConflicts.value = conflicts.data || []
+  if (conflicts?.ok) {
+    syncConflicts.value = conflicts.data || []
+    const valid = new Set(syncConflicts.value.map(item => item.id))
+    selectedConflictIds.value = selectedConflictIds.value.filter(id => valid.has(id))
+  }
+}
+function toggleConflict(id, checked) {
+  const selected = new Set(selectedConflictIds.value)
+  if (checked) selected.add(id); else selected.delete(id)
+  selectedConflictIds.value = [...selected]
+}
+function toggleAllConflicts(checked) {
+  selectedConflictIds.value = checked ? syncConflicts.value.map(item => item.id) : []
+}
+async function batchResolveConflicts(choice) {
+  if (!selectedConflictIds.value.length) return
+  try {
+    const label = choice === 'local' ? '保留本机' : '采用远端'
+    await ElMessageBox.confirm(`确定对选中的 ${selectedConflictIds.value.length} 条冲突批量执行“${label}”？`, '批量处理冲突', { type: 'warning', confirmButtonText: '确认处理' })
+    const res = await window.electronAPI?.cloudSync?.resolveConflicts?.([...selectedConflictIds.value], choice)
+    if (!res?.ok) throw new Error(res?.error || '批量处理失败')
+    ElMessage.success(`已处理 ${res.data?.length || selectedConflictIds.value.length} 条冲突`)
+    selectedConflictIds.value = []
+    await loadCloudStatus()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error?.message || '批量处理失败')
+  }
 }
 async function revokeSyncDevice(id) {
   const res = await window.electronAPI?.cloudSync?.revokeDevice?.(id)
@@ -752,11 +806,25 @@ async function syncNow() {
   cloudSyncing.value = false
   if (res?.ok) {
     const summary = res.data?.summary || {}
-    ElMessage.success(`全量同步完成：拉取更新 ${summary.pulled?.length || 0} 项，数据一致 ${summary.unchanged?.length || 0} 项`)
+    ElMessage.success(summary.protocolVersion === 2 ? `同步完成：上传 ${summary.pushed || 0} 项，应用 ${summary.applied || 0} 项` : `同步完成：拉取更新 ${summary.pulled?.length || 0} 项`)
     await loadCloudStatus()
   } else {
     ElMessage.error(res?.error || '同步失败')
   }
+}
+
+async function forceSync() {
+  try {
+    await ElMessageBox.confirm('将完整拉取云端数据，并删除或覆盖本机全部可同步数据。本机未上传的修改会永久丢失；仅本机图片资产不受影响。', '确认强制同步', { type: 'error', confirmButtonText: '强制覆盖本机', cancelButtonText: '取消' })
+    cloudForcing.value = true
+    const res = await window.electronAPI?.cloudSync?.forcePull?.()
+    if (!res?.ok) throw new Error(res?.error || '强制同步失败')
+    ElMessage.success(`强制同步完成：已读取 ${res.data?.operations || 0} 个操作，恢复 ${res.data?.entities || 0} 条数据`)
+    selectedConflictIds.value = []
+    await loadCloudStatus()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error?.message || '强制同步失败')
+  } finally { cloudForcing.value = false }
 }
 
 async function handleTotpSetup() {

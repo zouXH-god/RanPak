@@ -2387,6 +2387,14 @@ ipcMain.handle('cloud-sync:sync-now', async () => {
     try { return { ok: true, data: await cloudSync.syncAll() }; }
     catch (e) { return { ok: false, error: e.message }; }
 });
+ipcMain.handle('cloud-sync:refresh-status', async () => {
+    try { return { ok: true, data: await cloudSync.refreshStatus() }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('cloud-sync:force-pull', async () => {
+    try { return { ok: true, data: await cloudSync.forcePullAll() }; }
+    catch (e) { return { ok: false, error: e.message }; }
+});
 ipcMain.handle('storage:list', async (_event, type) => { try{return {ok:true,data:localStore.list(String(type)).map(row=>({id:row.entity_id,value:row.value}))}}catch(e){return {ok:false,error:e.message}} });
 ipcMain.handle('storage:get', async (_event, type, id) => { try{return {ok:true,data:localStore.get(String(type),String(id))}}catch(e){return {ok:false,error:e.message}} });
 ipcMain.handle('storage:put', async (_event, type, id, value) => { try{return {ok:true,data:localStore.put(String(type),String(id),value)}}catch(e){return {ok:false,error:e.message}} });
@@ -2432,6 +2440,7 @@ function cacheSyncKey() { if (!safeStorage.isEncryptionAvailable()) return; cons
 ipcMain.handle('cloud-sync:import-recovery-key', async () => { try { const result=await dialog.showOpenDialog({title:'导入 RanPak 恢复密钥',properties:['openFile'],filters:[{name:'JSON',extensions:['json']}]}); if(result.canceled)return {ok:false,error:'已取消'}; const data=syncCrypto.importRecovery(result.filePaths[0]); try { if(cloudSync.isLoggedIn())await syncV2.sync(); } catch(error) { syncCrypto.lock(); throw error; } cacheSyncKey(); cloudSync.startPolling(30000); return {ok:true,data}; } catch(e){return {ok:false,error:e.message}} });
 ipcMain.handle('cloud-sync:list-conflicts', async()=>({ok:true,data:localStore.conflicts()}));
 ipcMain.handle('cloud-sync:resolve-conflict', async(_event,id,choice,value,deleted)=>{try{const data=localStore.resolveConflict(id,choice,value,deleted);syncV2.schedule(0);return {ok:true,data}}catch(e){return {ok:false,error:e.message}}});
+ipcMain.handle('cloud-sync:resolve-conflicts', async(_event,ids,choice)=>{try{const data=localStore.resolveConflicts(ids,choice);syncV2.schedule(0);return {ok:true,data}}catch(e){return {ok:false,error:e.message}}});
 ipcMain.handle('cloud-sync:list-devices',async()=>{try{return {ok:true,data:await syncV2.devices()}}catch(e){return {ok:false,error:e.message}}});
 ipcMain.handle('cloud-sync:revoke-device',async(_event,id)=>{try{return {ok:true,data:await syncV2.revoke(id)}}catch(e){return {ok:false,error:e.message}}});
 ipcMain.handle('cloud-sync:reset-space',async()=>{try{return {ok:true,data:await syncV2.reset()}}catch(e){return {ok:false,error:e.message}}});

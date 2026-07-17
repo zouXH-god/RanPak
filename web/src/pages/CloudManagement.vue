@@ -1,9 +1,12 @@
 <template>
   <div class="h-full min-h-0 overflow-auto px-4 pb-6">
     <div class="mx-auto flex max-w-[1100px] flex-col gap-4">
-      <header class="rounded-lg border border-gray-200 bg-white px-5 py-4 shadow-sm">
-        <h1 class="text-xl font-semibold text-gray-900">云端管理</h1>
-        <p class="mt-1 text-sm text-gray-500">管理云端同步数据与账号。</p>
+      <header class="flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-5 py-4 shadow-sm">
+        <div>
+          <h1 class="text-xl font-semibold text-gray-900">云端管理</h1>
+          <p class="mt-1 text-sm text-gray-500">管理云端同步数据与账号。</p>
+        </div>
+        <el-button :loading="refreshing" @click="refreshAll(true)">刷新</el-button>
       </header>
 
       <div v-if="!status.loggedIn" class="rounded-lg border border-gray-200 bg-white p-8 text-center shadow-sm">
@@ -29,7 +32,10 @@
 
           <div class="mt-4 flex items-center justify-between">
             <span class="text-sm text-gray-500">上次同步：{{ formatTime(status.lastSyncAt) }}</span>
-            <el-button :loading="syncing" size="small" @click="syncNow">立即同步</el-button>
+            <div class="flex gap-2">
+              <el-button :loading="syncing" size="small" @click="syncNow">立即同步</el-button>
+              <el-button :loading="forcing" size="small" type="danger" plain @click="forceSync">强制同步</el-button>
+            </div>
           </div>
         </section>
 
@@ -130,6 +136,8 @@ import { Connection } from '@element-plus/icons-vue'
 const router = useRouter()
 const status = reactive({ loggedIn: false, username: '', role: '', lastSyncAt: 0 })
 const syncing = ref(false)
+const forcing = ref(false)
+const refreshing = ref(false)
 const users = ref([])
 const cloudData = ref({})
 
@@ -142,13 +150,7 @@ const dataSummary = computed(() => {
   ]
   return types.map((t) => {
     const d = cloudData.value[t.type]
-    let count = 0
-    if (d?.data) {
-      try {
-        const parsed = JSON.parse(d.data)
-        count = Array.isArray(parsed) ? parsed.length : Object.keys(parsed).length > 0 ? 1 : 0
-      } catch { count = d.data.length > 2 ? 1 : 0 }
-    }
+    const count = Number(d?.count || 0)
     return { ...t, count, updatedAt: d?.updatedAt }
   })
 })
@@ -162,14 +164,7 @@ const serverSettings = reactive({ allowRegistration: true, requireApproval: fals
 const settingsSaving = ref(false)
 
 onMounted(async () => {
-  await loadStatus()
-  if (status.loggedIn) {
-    await loadCloudData()
-    if (status.role === 'admin') {
-      await loadUsers()
-      await loadServerSettings()
-    }
-  }
+  await refreshAll(false)
 })
 
 async function loadStatus() {
@@ -179,10 +174,18 @@ async function loadStatus() {
   }
 }
 
-async function loadCloudData() {
-  const res = await window.electronAPI?.cloudSync?.syncNow?.()
+async function refreshAll(showMessage = false) {
+  refreshing.value = true
+  const res = await window.electronAPI?.cloudSync?.refreshStatus?.()
+  refreshing.value = false
   if (res?.ok && res.data) {
-    cloudData.value = res.data
+    Object.assign(status, res.data)
+    cloudData.value = res.data.remote?.overview || {}
+    if (status.role === 'admin') await Promise.all([loadUsers(), loadServerSettings()])
+    if (showMessage) ElMessage.success('云端状态已刷新')
+  } else {
+    await loadStatus()
+    if (showMessage) ElMessage.error(res?.error || '刷新失败')
   }
 }
 
@@ -199,12 +202,24 @@ async function syncNow() {
   syncing.value = false
   if (res?.ok) {
     const summary = res.data?.summary || {}
-    ElMessage.success(`全量同步完成：拉取更新 ${summary.pulled?.length || 0} 项，数据一致 ${summary.unchanged?.length || 0} 项`)
-    await loadStatus()
-    if (res.data?.types) cloudData.value = res.data.types
+    ElMessage.success(summary.protocolVersion === 2 ? `同步完成：上传 ${summary.pushed || 0} 项，应用 ${summary.applied || 0} 项` : `同步完成：拉取更新 ${summary.pulled?.length || 0} 项`)
+    await refreshAll(false)
   } else {
     ElMessage.error(res?.error || '同步失败')
   }
+}
+
+async function forceSync() {
+  try {
+    await ElMessageBox.confirm('将完整拉取云端数据，并删除或覆盖本机全部可同步数据。本机未上传的修改会永久丢失；仅本机图片资产不受影响。', '确认强制同步', { type: 'error', confirmButtonText: '强制覆盖本机', cancelButtonText: '取消' })
+    forcing.value = true
+    const res = await window.electronAPI?.cloudSync?.forcePull?.()
+    if (!res?.ok) throw new Error(res?.error || '强制同步失败')
+    ElMessage.success(`强制同步完成：已读取 ${res.data?.operations || 0} 个操作，恢复 ${res.data?.entities || 0} 条数据`)
+    await refreshAll(false)
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error?.message || '强制同步失败')
+  } finally { forcing.value = false }
 }
 
 function goToSettings() {

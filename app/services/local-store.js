@@ -166,7 +166,48 @@ function conflicts(space=getMeta('active_sync_space')||''){
   });
 }
 function resolveConflict(id,choice,mergedValue,mergedDeleted=false){return transaction(()=>{const c=init().prepare('SELECT * FROM conflicts_v2 WHERE id=? AND resolved_at IS NULL').get(id);if(!c)throw new Error('冲突不存在或已处理');if(!['local','remote','merged'].includes(choice))throw new Error('无效的冲突解决方式');if(choice==='merged'&&mergedValue===undefined&&!mergedDeleted)throw new Error('手工合并必须提供值');const deleted=choice==='local'?Boolean(c.local_deleted):choice==='remote'?Boolean(c.remote_deleted):Boolean(mergedDeleted);const value=choice==='local'?decode(c.entity_type,c.local_payload):choice==='remote'?decode(c.entity_type,c.remote_payload):mergedValue;const options={syncSpaceId:c.sync_space_id,mergeParents:JSON.parse(c.heads),parentOpId:null,force:true};const result=deleted?remove(c.entity_type,c.entity_id,options):put(c.entity_type,c.entity_id,value,options);init().prepare('UPDATE conflicts_v2 SET resolved_at=?,resolution_op_id=? WHERE id=?').run(Date.now(),result.opId,id);return result;});}
+function resolveConflicts(ids,choice){
+  const unique=[...new Set((ids||[]).map(String).filter(Boolean))];
+  if(!unique.length)throw new Error('请选择要处理的冲突');
+  if(unique.length>500)throw new Error('单次最多处理 500 条冲突');
+  if(!['local','remote'].includes(choice))throw new Error('批量处理仅支持保留本机或采用远端');
+  for(const id of unique)if(!init().prepare('SELECT 1 FROM conflicts_v2 WHERE id=? AND resolved_at IS NULL').get(id))throw new Error('所选冲突不存在或已处理，请刷新后重试');
+  return transaction(()=>unique.map(id=>resolveConflict(id,choice)));
+}
+function replaceFromRemote(space,entries,cursor=0){
+  if(!space)throw new Error('同步空间无效');
+  if(!Array.isArray(entries))throw new Error('远端操作格式无效');
+  const ordered=[...entries].sort((a,b)=>Number(a.op.seq)-Number(b.op.seq));
+  const latest=new Map();
+  for(const entry of ordered){
+    if(!entry?.op?.opId||!isSyncable(entry.op.entityType,entry.op.entityId))continue;
+    latest.set(`${entry.op.entityType}\u0000${entry.op.entityId}`,entry);
+  }
+  const removed=[];
+  transaction(()=>{
+    resetSyncSpace(space);
+    const existing=init().prepare('SELECT entity_type,entity_id FROM entities').all();
+    for(const row of existing){
+      if(!isSyncable(row.entity_type,row.entity_id))continue;
+      init().prepare('DELETE FROM entities WHERE entity_type=? AND entity_id=?').run(row.entity_type,row.entity_id);
+      if(!latest.has(`${row.entity_type}\u0000${row.entity_id}`))removed.push(row);
+    }
+    for(const entry of ordered){
+      const {op,value}=entry;
+      if(isSyncable(op.entityType,op.entityId))recordRemote(space,op,value);
+    }
+    for(const {op,value} of latest.values()){
+      const options={opId:op.opId,syncSpaceId:space,noChangeLog:true,force:true,origin:'remote'};
+      if(op.deleted)remove(op.entityType,op.entityId,options);else put(op.entityType,op.entityId,value,options);
+      replaceHeads(space,op.entityType,op.entityId,[{opId:op.opId,contentHash:op.contentHash,deleted:Boolean(op.deleted)}]);
+    }
+    setCursor(space,Number(cursor)||0);
+    setMeta('active_sync_space',space);
+  });
+  for(const row of removed)emitChange(row.entity_type,row.entity_id,true,'remote');
+  return{operations:ordered.length,entities:latest.size,cursor:Number(cursor)||0};
+}
 function subscribe(listener){events.on('changed',listener);return()=>events.off('changed',listener);}
 function close(){if(db){db.close();db=null;}}
 
-module.exports={configure,init,close,getMeta,setMeta,put,upsert:put,remove,get,list,all,replaceType,pending,markSynced,getCursor,setCursor,resetSyncSpace,retireUnboundSyncState,ensureBaseline,payloadOf,heads,conflicts,applyRemote,resolveConflict,subscribe,isSyncable,transaction,hash,dbPath:()=>dbPath};
+module.exports={configure,init,close,getMeta,setMeta,put,upsert:put,remove,get,list,all,replaceType,pending,markSynced,getCursor,setCursor,resetSyncSpace,retireUnboundSyncState,ensureBaseline,payloadOf,heads,conflicts,applyRemote,resolveConflict,resolveConflicts,replaceFromRemote,subscribe,isSyncable,transaction,hash,dbPath:()=>dbPath};
