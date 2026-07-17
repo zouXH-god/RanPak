@@ -4,6 +4,10 @@ const path = require('path');
 const tls = require('tls');
 const { ClickerRuntime } = require('./services/clicker');
 const { SshRuntime } = require('./services/ssh');
+const localStore = require('./services/local-store');
+const badgeHistoryAssets = require('./services/badge-history-assets');
+const syncCrypto = require('./services/sync-crypto');
+const syncV2 = require('./services/cloud-sync-v2');
 
 let win;
 let apiRuntime;
@@ -2314,14 +2318,11 @@ const sshHistoryPath = () => {
 };
 
 function readSshHistory() {
-    try { return JSON.parse(fs.readFileSync(sshHistoryPath(), 'utf-8')); }
-    catch { return []; }
+    return localStore.list('ssh_history').map((row) => row.value);
 }
 
 function writeSshHistory(data) {
-    const dir = path.dirname(sshHistoryPath());
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(sshHistoryPath(), JSON.stringify(data), 'utf-8');
+    localStore.replaceType('ssh_history', Array.isArray(data) ? data : [], (item, index) => item?.id || String(index));
 }
 
 cloudSync.registerDataType('ssh_history', () => {
@@ -2335,7 +2336,6 @@ ipcMain.handle('ssh:get-history', async () => {
 });
 ipcMain.handle('ssh:save-history', async (_event, data) => {
     writeSshHistory(data);
-    cloudSync.triggerSync('ssh_history');
     return { ok: true };
 });
 
@@ -2387,6 +2387,54 @@ ipcMain.handle('cloud-sync:sync-now', async () => {
     try { return { ok: true, data: await cloudSync.syncAll() }; }
     catch (e) { return { ok: false, error: e.message }; }
 });
+ipcMain.handle('storage:list', async (_event, type) => { try{return {ok:true,data:localStore.list(String(type)).map(row=>({id:row.entity_id,value:row.value}))}}catch(e){return {ok:false,error:e.message}} });
+ipcMain.handle('storage:get', async (_event, type, id) => { try{return {ok:true,data:localStore.get(String(type),String(id))}}catch(e){return {ok:false,error:e.message}} });
+ipcMain.handle('storage:put', async (_event, type, id, value) => { try{return {ok:true,data:localStore.put(String(type),String(id),value)}}catch(e){return {ok:false,error:e.message}} });
+ipcMain.handle('storage:delete', async (_event, type, id) => { try{return {ok:true,data:localStore.remove(String(type),String(id))}}catch(e){return {ok:false,error:e.message}} });
+ipcMain.handle('badge-history:load', async () => {
+    try {
+        const origin = new URL(process.env.RAN_PAK_API_BASE_URL || 'http://127.0.0.1:8000/api').origin;
+        return { ok: true, data: badgeHistoryAssets.load(origin) };
+    } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('badge-history:save', async (_event, records) => {
+    try {
+        const origin = new URL(process.env.RAN_PAK_API_BASE_URL || 'http://127.0.0.1:8000/api').origin;
+        return { ok: true, data: badgeHistoryAssets.save(records, origin) };
+    } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('storage:migrate-legacy-local-storage', async (_event, entries) => {
+    try {
+        if (localStore.getMeta('local_storage_migration_v2') === 'done') return { ok: true, data: { migrated: false } };
+        const safeEntries = Array.isArray(entries) ? entries.filter(item => item && typeof item.key === 'string' && typeof item.value === 'string').slice(0, 10000) : [];
+        if (safeEntries.length) {
+            const backupDir = path.join(process.env.RAN_PAK_RUNTIME_DIR, 'data', 'backups');
+            fs.mkdirSync(backupDir, { recursive: true });
+            const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+            fs.writeFileSync(path.join(backupDir, `local-storage-${stamp}.json`), JSON.stringify(safeEntries, null, 2), { flag: 'wx' });
+        }
+        const existing = new Set(localStore.list('local_storage', true).map(row => row.entity_id));
+        localStore.transaction(() => {
+            for (const item of safeEntries) {
+                if (existing.has(item.key) || ['modelId', 'modelTexturesId'].includes(item.key)) continue;
+                let value;
+                try { value = { encoding: 'json', value: JSON.parse(item.value) }; }
+                catch { value = { encoding: 'string', value: item.value }; }
+                localStore.put('local_storage', item.key, value);
+            }
+            localStore.setMeta('local_storage_migration_v2', 'done');
+        });
+        return { ok: true, data: { migrated: true, count: safeEntries.length } };
+    } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('cloud-sync:create-recovery-key', async () => { try { if(!syncCrypto.status().locked)throw new Error('当前同步空间已有恢复密钥，请勿重复创建'); const result=await dialog.showSaveDialog({title:'保存 RanPak 恢复密钥',defaultPath:'ranpak-recovery-key.json',filters:[{name:'JSON',extensions:['json']}]}); if(result.canceled)return {ok:false,error:'已取消'}; if(cloudSync.isLoggedIn())await cloudSync.syncAll(); const data=syncCrypto.createRecovery(result.filePath); cacheSyncKey(); await syncV2.sync(); cloudSync.startPolling(30000); return {ok:true,data}; } catch(e){return {ok:false,error:e.message}} });
+function cacheSyncKey() { if (!safeStorage.isEncryptionAvailable()) return; const target=path.join(process.env.RAN_PAK_RUNTIME_DIR,'data','sync-key.bin'); fs.mkdirSync(path.dirname(target),{recursive:true}); fs.writeFileSync(target,safeStorage.encryptString(syncCrypto.exportForCache().toString('base64'))); }
+ipcMain.handle('cloud-sync:import-recovery-key', async () => { try { const result=await dialog.showOpenDialog({title:'导入 RanPak 恢复密钥',properties:['openFile'],filters:[{name:'JSON',extensions:['json']}]}); if(result.canceled)return {ok:false,error:'已取消'}; const data=syncCrypto.importRecovery(result.filePaths[0]); try { if(cloudSync.isLoggedIn())await syncV2.sync(); } catch(error) { syncCrypto.lock(); throw error; } cacheSyncKey(); cloudSync.startPolling(30000); return {ok:true,data}; } catch(e){return {ok:false,error:e.message}} });
+ipcMain.handle('cloud-sync:list-conflicts', async()=>({ok:true,data:localStore.conflicts()}));
+ipcMain.handle('cloud-sync:resolve-conflict', async(_event,id,choice,value,deleted)=>{try{const data=localStore.resolveConflict(id,choice,value,deleted);syncV2.schedule(0);return {ok:true,data}}catch(e){return {ok:false,error:e.message}}});
+ipcMain.handle('cloud-sync:list-devices',async()=>{try{return {ok:true,data:await syncV2.devices()}}catch(e){return {ok:false,error:e.message}}});
+ipcMain.handle('cloud-sync:revoke-device',async(_event,id)=>{try{return {ok:true,data:await syncV2.revoke(id)}}catch(e){return {ok:false,error:e.message}}});
+ipcMain.handle('cloud-sync:reset-space',async()=>{try{return {ok:true,data:await syncV2.reset()}}catch(e){return {ok:false,error:e.message}}});
 ipcMain.handle('cloud-sync:get-config', async () => {
     try { return { ok: true, data: cloudSync.getCloudConfig() }; }
     catch (e) { return { ok: false, error: e.message }; }
@@ -2756,6 +2804,25 @@ async function createWindow() {
 
 app.whenReady().then(async () => {
     process.env.RAN_PAK_RUNTIME_DIR = app.getPath('userData');
+    localStore.configure({ safeStorage });
+    localStore.init();
+    try { require('./services/storage-migration').migrate(); } catch (e) { dialog.showErrorBox('本地数据迁移失败', e.message); throw e; }
+    localStore.subscribe((change) => {
+        BrowserWindow.getAllWindows().forEach((targetWindow) => {
+            if (targetWindow.isDestroyed()) return;
+            targetWindow.webContents.send('storage:changed', change);
+            if (change.origin === 'remote') {
+                const mapped = change.type.startsWith('ssh_') && change.type !== 'ssh_history'
+                    ? (change.type === 'ssh_preset_command' ? 'ssh_preset_commands' : 'ssh_profiles')
+                    : change.type === 'dns_account' ? 'dns_accounts'
+                    : change.type === 'app_config' ? (change.id === 'feature_visibility' ? 'feature_visibility' : change.id === 'ai' ? 'ai_config' : '')
+                    : change.type;
+                if (mapped) targetWindow.webContents.send('cloud-sync:data-updated', { type: mapped, data: localStore.get(change.type, change.id) });
+            }
+        });
+        if (change.origin !== 'remote' && localStore.isSyncable(change.type, change.id)) syncV2.schedule();
+    });
+    try { const cached=path.join(process.env.RAN_PAK_RUNTIME_DIR,'data','sync-key.bin'); if(safeStorage.isEncryptionAvailable()&&fs.existsSync(cached)){const raw=Buffer.from(safeStorage.decryptString(fs.readFileSync(cached)),'base64');syncCrypto.importFromCache(raw);} } catch(e) { console.error('[sync] cached key unavailable:',e.message); }
     const { startApiServer } = require('./services/api-server');
     apiRuntime = await startApiServer();
     process.env.RAN_PAK_API_BASE_URL = apiRuntime.baseUrl;
@@ -2812,6 +2879,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
     appQuitting = true;
+    try { localStore.close(); } catch {}
     if (clockWin && !clockWin.isDestroyed()) {
         writeClockConfig({ visible: true, bounds: clockWin.getBounds() });
     }

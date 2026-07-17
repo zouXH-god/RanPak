@@ -3,6 +3,7 @@ const path = require("path");
 const net = require("net");
 const dns = require("dns");
 const { Client } = require("ssh2");
+const localStore = require('../local-store');
 
 const SENSITIVE_FIELDS = ["password", "passphrase"];
 const DEFAULT_KEEPALIVE_INTERVAL = 15000;
@@ -145,46 +146,13 @@ class SshRuntime {
     }
 
     readStore() {
-        try {
-            const raw = fs.readFileSync(this.configPath, "utf-8").replace(/^\uFEFF/, "").trim();
-            let parsed = raw ? JSON.parse(raw) : {};
-
-            // 兼容云端响应包装、导出的 data 包装以及顶层同步记录数组。
-            if (parsed?.ssh_profiles?.data != null) parsed = parsed.ssh_profiles.data;
-            if (typeof parsed === "string") parsed = JSON.parse(parsed.replace(/^\uFEFF/, ""));
-            if (!Array.isArray(parsed) && parsed?.data != null && parsed.profiles == null) parsed = parsed.data;
-            if (typeof parsed === "string") parsed = JSON.parse(parsed.replace(/^\uFEFF/, ""));
-            if (Array.isArray(parsed)) {
-                parsed = {
-                    folders: parsed
-                        .filter((item) => item?._syncType === "folder")
-                        .map(({ _syncType, ...folder }) => folder),
-                    profiles: parsed
-                        .filter((item) => !item?._syncType || item?._syncType === "profile")
-                        .map(({ _syncType, ...profile }) => profile),
-                    remoteImportSources: parsed
-                        .filter((item) => item?._syncType === "remoteImportSource")
-                        .map(({ _syncType, ...source }) => source),
-                    privates: parsed
-                        .filter((item) => item?._syncType === "private")
-                        .map(({ _syncType, ...key }) => key),
-                };
-            }
-            if (!parsed || typeof parsed !== "object") throw new Error("顶层内容必须是 JSON 对象或数组");
-            return {
-                ...parsed,
-                profiles: Array.isArray(parsed.profiles) ? parsed.profiles : [],
-                folders: Array.isArray(parsed.folders) ? parsed.folders : [],
-                remoteImportSources: Array.isArray(parsed.remoteImportSources) ? parsed.remoteImportSources : [],
-                privates: Array.isArray(parsed.privates) ? parsed.privates : [],
-                presetCommands: Array.isArray(parsed.presetCommands) ? parsed.presetCommands : [],
-            };
-        } catch (error) {
-            if (error?.code !== "ENOENT") {
-                throw new Error(`SSH 配置文件读取失败(${this.configPath})：${error.message}`);
-            }
-            return { profiles: [], folders: [], remoteImportSources: [], privates: [], presetCommands: [] };
-        }
+        return {
+            profiles: localStore.list('ssh_profile').map(row=>row.value),
+            folders: localStore.list('ssh_folder').map(row=>row.value),
+            remoteImportSources: localStore.list('ssh_import_source').map(row=>row.value),
+            privates: localStore.list('ssh_private_key').map(row=>row.value),
+            presetCommands: localStore.list('ssh_preset_command').map(row=>row.value),
+        };
     }
 
     writeStore(store) {
@@ -196,14 +164,13 @@ class SshRuntime {
             privates: Array.isArray(store?.privates) ? store.privates : [],
             presetCommands: Array.isArray(store?.presetCommands) ? store.presetCommands : [],
         };
-        fs.mkdirSync(path.dirname(this.configPath), { recursive: true });
-        fs.writeFileSync(this.configPath, JSON.stringify(normalized, null, 2), "utf-8");
-
-        try {
-            const cloudSync = require("../cloud-sync");
-            cloudSync.triggerSync("ssh_profiles");
-            cloudSync.triggerSync("ssh_preset_commands");
-        } catch {}
+        localStore.transaction(()=>{
+            localStore.replaceType('ssh_profile', normalized.profiles, item=>item.id);
+            localStore.replaceType('ssh_folder', normalized.folders, item=>item.id);
+            localStore.replaceType('ssh_import_source', normalized.remoteImportSources, item=>item.id);
+            localStore.replaceType('ssh_private_key', normalized.privates, item=>item.id);
+            localStore.replaceType('ssh_preset_command', normalized.presetCommands, item=>item.id);
+        });
 
         return normalized;
     }

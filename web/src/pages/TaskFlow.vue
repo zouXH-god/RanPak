@@ -143,6 +143,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick, provide } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { persistentStorage } from '../utils/sqliteStorage'
 import { Plus, Delete, CaretRight, List, Upload, Download, Close } from '@element-plus/icons-vue'
 import MindMapNode from '../components/MindMapNode.vue'
 import RichTextEditor from '../components/RichTextEditor.vue'
@@ -314,7 +315,7 @@ function normalizeNode(node = {}) {
 
 function loadFlows() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = persistentStorage.getItem(STORAGE_KEY)
     const parsed = raw ? JSON.parse(raw) : []
     flows.value = parsed.map((flow) => ({
       id: flow.id || createId(),
@@ -328,7 +329,7 @@ function loadFlows() {
 }
 
 function saveFlows() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(flows.value))
+  persistentStorage.setItem(STORAGE_KEY, JSON.stringify(flows.value))
   syncActiveFlowToOverlay()
 }
 

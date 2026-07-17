@@ -53,6 +53,18 @@ func main() {
 			sync.GET("/:type", handlers.GetSyncData)
 			sync.POST("/:type/merge", handlers.MergeSyncData)
 		}
+		syncV2 := api.Group("/sync/v2")
+		syncV2.Use(middleware.JWTAuth(cfg.JWTSecret))
+		{
+			syncV2.POST("/devices", handlers.RegisterSyncV2Device)
+			syncV2.GET("/devices", handlers.ListSyncV2Devices)
+			syncV2.DELETE("/devices/:id", handlers.RevokeSyncV2Device)
+			syncV2.POST("/push", handlers.PushSyncV2)
+			syncV2.POST("/activate", handlers.ActivateSyncV2)
+			syncV2.GET("/pull", handlers.PullSyncV2)
+			syncV2.GET("/status", handlers.SyncV2Status)
+			syncV2.DELETE("/space", handlers.ResetSyncV2)
+		}
 
 		admin := api.Group("/admin")
 		admin.Use(middleware.JWTAuth(cfg.JWTSecret))

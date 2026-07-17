@@ -12,12 +12,12 @@ import (
 )
 
 var validDataTypes = map[string]bool{
-	"ai_config":            true,
-	"ssh_profiles":         true,
-	"ssh_history":          true,
-	"ssh_preset_commands":  true,
-	"dns_accounts":         true,
-	"feature_visibility":   true,
+	"ai_config":           true,
+	"ssh_profiles":        true,
+	"ssh_history":         true,
+	"ssh_preset_commands": true,
+	"dns_accounts":        true,
+	"feature_visibility":  true,
 }
 
 func GetSyncStatus(c *gin.Context) {
@@ -96,6 +96,9 @@ func GetAllSyncData(c *gin.Context) {
 }
 
 func MergeSyncData(c *gin.Context) {
+	if rejectLegacyV2(c) {
+		return
+	}
 	dataType := c.Param("type")
 	if !validDataTypes[dataType] {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "不支持的数据类型"})

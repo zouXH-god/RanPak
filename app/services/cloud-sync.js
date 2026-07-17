@@ -1,14 +1,7 @@
-const fs = require("fs");
-const path = require("path");
-
-function getCloudConfigPath() {
-    const runtimeRoot = process.env.RAN_PAK_RUNTIME_DIR || path.resolve(__dirname, "..");
-    return path.join(runtimeRoot, "config", "cloud-sync.json");
-}
-
 const DEFAULT_CLOUD_CONFIG = {
     url: "",
     username: "",
+    userId: 0,
     token: "",
     role: "",
     lastSyncAt: 0,
@@ -23,8 +16,7 @@ let _writingFromCloud = false;
 function loadCloudConfig() {
     if (_config) return _config;
     try {
-        const raw = fs.readFileSync(getCloudConfigPath(), "utf-8");
-        _config = { ...DEFAULT_CLOUD_CONFIG, ...JSON.parse(raw) };
+        _config = { ...DEFAULT_CLOUD_CONFIG, ...(require('./local-store').get('cloud_config', 'default') || {}) };
     } catch {
         _config = { ...DEFAULT_CLOUD_CONFIG };
     }
@@ -33,10 +25,7 @@ function loadCloudConfig() {
 
 function saveCloudConfig(config) {
     _config = { ...DEFAULT_CLOUD_CONFIG, ...config };
-    const configPath = getCloudConfigPath();
-    const dir = path.dirname(configPath);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(configPath, JSON.stringify(_config, null, 2), "utf-8");
+    require('./local-store').put('cloud_config', 'default', _config);
     return _config;
 }
 
@@ -113,6 +102,7 @@ async function login(url, username, password, totpCode = "") {
     saveCloudConfig({
         url,
         username,
+        userId: data.data.user.id,
         token: data.data.token,
         role: data.data.user.role,
         enabled: true,
@@ -147,6 +137,7 @@ async function register(url, username, password) {
     saveCloudConfig({
         url,
         username,
+        userId: data.data.user.id,
         token: data.data.token,
         role: data.data.user.role,
         enabled: true,
@@ -160,6 +151,7 @@ async function register(url, username, password) {
 function logout() {
     stopPolling();
     _baselineInitialized = false;
+    try { require('./local-store').setMeta('active_sync_space', ''); } catch {}
     saveCloudConfig({ ...DEFAULT_CLOUD_CONFIG });
     return { success: true };
 }
@@ -180,6 +172,15 @@ function registerDataType(type, reader, writer) {
 
 function onDataUpdated(callback) {
     _onDataUpdated = callback;
+}
+function applyStoredType(type) {
+    const writer = DATA_TYPE_WRITERS[type];
+    if (!writer) return;
+    const rows = require('./local-store').list(type);
+    const value = rows.length === 1 && rows[0].entity_id === 'default' ? rows[0].value : rows.map((row) => row.value);
+    _writingFromCloud = true;
+    try { writer(value); } finally { _writingFromCloud = false; }
+    if (_onDataUpdated) _onDataUpdated(type, value);
 }
 
 async function fetchRemoteStatus() {
@@ -243,6 +244,31 @@ function dataContains(local, remote) {
     );
 }
 
+function mergeLegacyMigrationData(type, local, remote) {
+    if (dataEquals(local, remote)) return local;
+    if (Array.isArray(local) && Array.isArray(remote)) {
+        const result = [...local];
+        const byId = new Map(local.filter(item => item?.id).map(item => [String(item.id), item]));
+        for (const item of remote) {
+            const id = item?.id == null ? '' : String(item.id);
+            if (!id) { if (!result.some(existing => dataEquals(existing, item))) result.push(item); continue; }
+            const existing = byId.get(id);
+            if (!existing) { result.push(item); byId.set(id, item); continue; }
+            if (!dataEquals(existing, item)) throw new Error(`旧云端迁移冲突(${type}/${id})：本机与云端内容不同，请先使用旧客户端处理或清空旧云端数据`);
+        }
+        return result;
+    }
+    if (local && remote && typeof local === 'object' && typeof remote === 'object') {
+        const result = { ...remote, ...local };
+        for (const key of Object.keys(local)) {
+            if (key === '_updatedAt' || key === '_syncType' || !(key in remote)) continue;
+            if (!dataEquals(local[key], remote[key])) throw new Error(`旧云端迁移冲突(${type}/${key})：本机与云端内容不同，请先使用旧客户端处理或清空旧云端数据`);
+        }
+        return result;
+    }
+    throw new Error(`旧云端迁移冲突(${type})：本机与云端内容不同，请先处理后再启用 v2`);
+}
+
 async function pullDataType(type) {
     if (!isLoggedIn()) return null;
 
@@ -282,6 +308,12 @@ async function syncDataType(type) {
 
 async function syncAll() {
     if (!isLoggedIn()) throw new Error("未配置云端服务或未登录");
+    const cryptoStatus = require('./sync-crypto').status();
+    if (!cryptoStatus.locked) {
+        const result = await require('./cloud-sync-v2').sync();
+        saveCloudConfig({ ...loadCloudConfig(), lastSyncAt: Date.now() });
+        return { summary: { protocolVersion: 2, ...result } };
+    }
     if (_syncInProgress) throw new Error("同步正在进行中，请稍候");
     _syncInProgress = true;
 
@@ -301,7 +333,8 @@ async function syncAll() {
                     const localBefore = DATA_TYPE_READERS[type]();
                     _syncVersions[type] = Number(remote.version || 0);
                     _lastRemoteUpdatedAt[type] = Number(remote.updatedAt || 0);
-                    await writeRemoteData(type, remote.data, "全量拉取写回失败");
+                    const mergedMigration = mergeLegacyMigrationData(type, localBefore, parsedRemote);
+                    await writeRemoteData(type, mergedMigration, "旧云端迁移写回失败");
                     const localAfter = DATA_TYPE_READERS[type]();
                     if (!dataContains(localAfter, parsedRemote)) {
                         throw new Error(`云端数据写入后校验失败(${type})：本地存储内容与云端不一致`);
@@ -331,7 +364,13 @@ async function syncAll() {
 // 防抖同步（本地数据变更后触发上传）
 let _debounceTimers = {};
 function triggerSync(type, delayMs = 3000) {
-    if (!isLoggedIn() || _writingFromCloud) return;
+    if (_writingFromCloud) return;
+
+    if (!require('./sync-crypto').status().locked) {
+        require('./cloud-sync-v2').schedule(delayMs);
+        return;
+    }
+    if (!isLoggedIn()) return;
 
     if (_debounceTimers[type]) {
         clearTimeout(_debounceTimers[type]);
@@ -396,10 +435,15 @@ async function checkRemoteUpdates() {
 function startPolling(intervalMs = 30000) {
     stopPolling();
     if (!isLoggedIn()) return;
+    if (!require('./sync-crypto').status().locked) {
+        require('./cloud-sync-v2').startPolling(intervalMs);
+        return;
+    }
     _pollInterval = setInterval(checkRemoteUpdates, intervalMs);
 }
 
 function stopPolling() {
+    try { require('./cloud-sync-v2').stopPolling(); } catch {}
     if (_pollInterval) {
         clearInterval(_pollInterval);
         _pollInterval = null;
@@ -408,6 +452,9 @@ function stopPolling() {
 
 function getStatus() {
     const cfg = loadCloudConfig();
+    const localStore = require('./local-store');
+    const cryptoStatus = require('./sync-crypto').status();
+    const v2Status = cryptoStatus.locked ? {} : require('./cloud-sync-v2').status();
     return {
         loggedIn: isLoggedIn(),
         username: cfg.username,
@@ -415,7 +462,16 @@ function getStatus() {
         url: cfg.url,
         lastSyncAt: cfg.lastSyncAt,
         enabled: cfg.enabled,
-        syncing: _syncInProgress,
+        syncing: _syncInProgress || Boolean(v2Status.syncing),
+        protocolVersion: cryptoStatus.locked ? 1 : Number(localStore.getMeta(`sync_protocol:${v2Status.syncSpaceId}`) || 0),
+        deviceId: localStore.getMeta('device_id'),
+        locked: cryptoStatus.locked,
+        keyId: cryptoStatus.keyId,
+        conflictCount: localStore.conflicts(v2Status.syncSpaceId).length,
+        pendingCount: v2Status.pendingCount || 0,
+        syncSpaceId: v2Status.syncSpaceId || '',
+        cursor: v2Status.cursor || 0,
+        lastError: v2Status.lastError || '',
     };
 }
 
@@ -480,6 +536,7 @@ module.exports = {
     pullDataType,
     triggerSync,
     registerDataType,
+    applyStoredType,
     onDataUpdated,
     startPolling,
     stopPolling,

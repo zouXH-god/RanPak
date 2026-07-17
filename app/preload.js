@@ -215,6 +215,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
         register: (payload) => ipcRenderer.invoke('cloud-sync:register', payload),
         logout: () => ipcRenderer.invoke('cloud-sync:logout'),
         syncNow: () => ipcRenderer.invoke('cloud-sync:sync-now'),
+        createRecoveryKey: () => ipcRenderer.invoke('cloud-sync:create-recovery-key'),
+        importRecoveryKey: () => ipcRenderer.invoke('cloud-sync:import-recovery-key'),
+        listConflicts: () => ipcRenderer.invoke('cloud-sync:list-conflicts'),
+        resolveConflict: (id, choice, value, deleted = false) => ipcRenderer.invoke('cloud-sync:resolve-conflict', id, choice, value, deleted),
+        listDevices: () => ipcRenderer.invoke('cloud-sync:list-devices'),
+        revokeDevice: (id) => ipcRenderer.invoke('cloud-sync:revoke-device', id),
+        resetSpace: () => ipcRenderer.invoke('cloud-sync:reset-space'),
         getConfig: () => ipcRenderer.invoke('cloud-sync:get-config'),
         getUsers: () => ipcRenderer.invoke('cloud-sync:get-users'),
         createUser: (data) => ipcRenderer.invoke('cloud-sync:create-user', data),
@@ -231,6 +238,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
             ipcRenderer.on('cloud-sync:data-updated', listener)
             return () => ipcRenderer.removeListener('cloud-sync:data-updated', listener)
         },
+    },
+    storage: {
+        list: (type) => ipcRenderer.invoke('storage:list', type),
+        get: (type, id) => ipcRenderer.invoke('storage:get', type, id),
+        put: (type, id, value) => ipcRenderer.invoke('storage:put', type, id, value),
+        delete: (type, id) => ipcRenderer.invoke('storage:delete', type, id),
+        migrateLegacyLocalStorage: (entries) => ipcRenderer.invoke('storage:migrate-legacy-local-storage', entries),
+        onChanged: (callback) => { const listener=(_event,payload)=>callback(payload); ipcRenderer.on('storage:changed',listener); return ()=>ipcRenderer.removeListener('storage:changed',listener) },
+    },
+    badgeHistory: {
+        load: () => ipcRenderer.invoke('badge-history:load'),
+        save: (records) => ipcRenderer.invoke('badge-history:save', records),
     },
     clicker: {
         getClickerState: () => ipcRenderer.invoke('clicker:get-state'),

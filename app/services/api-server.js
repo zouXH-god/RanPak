@@ -1,6 +1,7 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+const badgeHistoryAssets = require('./badge-history-assets');
 const multer = require("multer");
 const { API_TOKEN, authMiddleware } = require("./auth");
 const { ensureRuntimeDirs, WEB_DIST_DIR } = require("./config");
@@ -313,6 +314,14 @@ function createApiApp() {
             return sendSuccess(res, { description: "", command: raw.trim() });
         }
     }));
+
+    app.get('/badge-history-assets/:name', (req, res) => {
+        const target = badgeHistoryAssets.resolveAsset(req.params.name);
+        if (!target) return res.status(404).end();
+        res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        return res.sendFile(target);
+    });
 
     if (fs.existsSync(WEB_DIST_DIR)) {
         app.use(express.static(WEB_DIST_DIR));

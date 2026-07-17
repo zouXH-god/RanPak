@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const YAML = require("yaml");
+const localStore = require('./local-store');
 
 const APP_ROOT = path.resolve(__dirname, "..");
 const PROJECT_ROOT = path.resolve(APP_ROOT, "..");
@@ -41,13 +41,7 @@ function ensureRuntimeDirs() {
 }
 
 function loadDnsConfig() {
-    ensureRuntimeDirs();
-    const dnsPath = _paths().DNS_CONFIG_PATH;
-    if (!fs.existsSync(dnsPath)) {
-        return { dns_access: [] };
-    }
-    const raw = fs.readFileSync(dnsPath, "utf-8");
-    return YAML.parse(raw) || { dns_access: [] };
+    return { dns_access: localStore.list('dns_account').map((row) => row.value) };
 }
 
 function saveDnsConfig(config) {
@@ -55,14 +49,7 @@ function saveDnsConfig(config) {
     const nextConfig = {
         dns_access: Array.isArray(config?.dns_access) ? config.dns_access : [],
     };
-    fs.writeFileSync(_paths().DNS_CONFIG_PATH, YAML.stringify(nextConfig), "utf-8");
-
-    try {
-        const cloudSync = require("./cloud-sync");
-        cloudSync.triggerSync("dns_accounts");
-    } catch (e) {
-        console.error("[config] cloud-sync trigger failed:", e.message);
-    }
+    localStore.replaceType('dns_account', nextConfig.dns_access, (item) => item.id || item.name);
 
     return nextConfig;
 }

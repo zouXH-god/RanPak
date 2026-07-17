@@ -104,6 +104,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { persistentStorage } from '../utils/sqliteStorage'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, Delete, Document, DocumentAdd, Download, Position } from '@element-plus/icons-vue'
 import KeyValueRows from '../components/devtools/KeyValueRows.vue'
@@ -228,7 +229,7 @@ function formatBody() {
 
 function openResponseInJsonEditor() {
   if (!responseText.value) return
-  window.localStorage.setItem(JSON_EDITOR_DRAFT_KEY, responseText.value)
+  persistentStorage.setItem(JSON_EDITOR_DRAFT_KEY, responseText.value)
   router.push('/json-editor')
 }
 

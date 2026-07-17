@@ -1147,6 +1147,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { persistentStorage } from '../utils/sqliteStorage'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { ArrowLeft, ArrowRight, Close, Delete, Document, Download, Edit, EditPen, Folder, FolderAdd, Monitor, Plus, Refresh, Search, Setting, SwitchButton, Upload } from '@element-plus/icons-vue'
@@ -1167,11 +1168,11 @@ const connectionHistory = ref([])
 async function loadConnectionHistory() {
   const res = await window.electronAPI?.ssh?.getHistory?.()
   if (res?.ok && Array.isArray(res.data)) return res.data
-  try { return JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || '[]') } catch { return [] }
+  try { return JSON.parse(persistentStorage.getItem(HISTORY_STORAGE_KEY) || '[]') } catch { return [] }
 }
 function saveConnectionHistory() {
   const data = [...connectionHistory.value]
-  localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(data))
+  persistentStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(data))
   window.electronAPI?.ssh?.saveHistory?.(data)
 }
 function pushConnectionHistory(profileId) {

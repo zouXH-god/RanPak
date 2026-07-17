@@ -284,7 +284,6 @@ const expandCenterLock = ref(true)
 const origDims = ref({ width: 0, height: 0 })
 const exporting = ref(false)
 const historyRecords = ref([])
-const HISTORY_KEY = 'ran-pak.badge-print.history'
 const HISTORY_LIMIT = 12
 
 function createGrid(row, col) {
@@ -586,17 +585,22 @@ function pasteImage(i, j) {
   tempImages.value[i][j] = copiedTemp.value || copiedImage.value
 }
 
-function loadHistory() {
+async function loadHistory() {
   try {
-    const raw = localStorage.getItem(HISTORY_KEY)
-    historyRecords.value = raw ? JSON.parse(raw) : []
-  } catch {
+    const result = await window.electronAPI.badgeHistory.load()
+    if (!result?.ok) throw new Error(result?.error || '读取历史记录失败')
+    historyRecords.value = Array.isArray(result.data) ? result.data : []
+  } catch (error) {
+    console.error(error)
     historyRecords.value = []
+    ElMessage.warning('历史记录读取失败')
   }
 }
 
-function persistHistory() {
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(historyRecords.value.slice(0, HISTORY_LIMIT)))
+async function persistHistory() {
+  const result = await window.electronAPI.badgeHistory.save(historyRecords.value.slice(0, HISTORY_LIMIT))
+  if (!result?.ok) throw new Error(result?.error || '保存历史记录失败')
+  historyRecords.value = Array.isArray(result.data) ? result.data : []
 }
 
 async function createThumbnail() {
@@ -632,7 +636,7 @@ async function saveHistorySnapshot(reason = '导出保存') {
       record,
       ...historyRecords.value.filter((item) => item.id !== record.id),
     ].slice(0, HISTORY_LIMIT)
-    persistHistory()
+    await persistHistory()
   } catch (error) {
     console.error(error)
     ElMessage.warning('历史记录保存失败，可能是图片数据过大')
@@ -653,9 +657,16 @@ function applyHistory(record) {
   ElMessage.success('历史记录已应用')
 }
 
-function deleteHistory(id) {
+async function deleteHistory(id) {
+  const previous = historyRecords.value
   historyRecords.value = historyRecords.value.filter((item) => item.id !== id)
-  persistHistory()
+  try {
+    await persistHistory()
+  } catch (error) {
+    console.error(error)
+    historyRecords.value = previous
+    ElMessage.error('删除历史记录失败')
+  }
 }
 
 async function exportImage() {
@@ -684,7 +695,7 @@ async function exportImage() {
 }
 
 onMounted(() => {
-  loadHistory()
+  void loadHistory()
   applyLayout()
   updatePreviewBoxSize()
   window.addEventListener('resize', updatePreviewBoxSize)

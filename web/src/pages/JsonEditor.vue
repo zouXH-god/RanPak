@@ -73,6 +73,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { persistentStorage } from '../utils/sqliteStorage'
 import {
   CopyDocument,
   Crop,
@@ -201,7 +202,7 @@ const UI_TRANSLATIONS = {
 
 onMounted(async () => {
   await nextTick()
-  const draft = window.localStorage.getItem(DRAFT_KEY)
+  const draft = persistentStorage.getItem(DRAFT_KEY)
   content = draft === null ? { json: SAMPLE_JSON } : { text: draft }
   editor = createJSONEditor({
     target: editorRef.value,
@@ -236,7 +237,7 @@ function handleEditorChange(updatedContent) {
 function refreshState(nextContent = getEditorContent()) {
   const text = contentToText(nextContent)
   currentText.value = text
-  window.localStorage.setItem(DRAFT_KEY, text)
+  persistentStorage.setItem(DRAFT_KEY, text)
   stats.characters = text.length
   stats.lines = text ? text.split(/\r\n|\r|\n/).length : 0
   try {
@@ -337,7 +338,7 @@ async function copyJson() {
 
 function clearEditor() {
   setEditorContent({ text: '' })
-  window.localStorage.setItem(DRAFT_KEY, '')
+  persistentStorage.setItem(DRAFT_KEY, '')
   ElMessage.success('内容已清空')
 }
 

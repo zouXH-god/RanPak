@@ -239,6 +239,37 @@
         <div v-if="cloudLoggedIn" class="mb-4 rounded-md bg-slate-50 p-3 text-sm text-gray-600">
           <div>已登录为：{{ cloudStatus.username }}（{{ cloudStatus.role === 'admin' ? '管理员' : '普通用户' }}）</div>
           <div v-if="cloudStatus.lastSyncAt">上次同步：{{ formatSyncTime(cloudStatus.lastSyncAt) }}</div>
+          <div>同步协议：v{{ cloudStatus.protocolVersion || 1 }} · 设备 {{ cloudStatus.deviceId || '-' }}</div>
+          <div v-if="cloudStatus.locked" class="mt-1 text-amber-600">端到端加密尚未解锁</div>
+          <div v-else class="mt-1 text-emerald-600">端到端加密已解锁 · 待上传 {{ cloudStatus.pendingCount || 0 }} · 冲突 {{ cloudStatus.conflictCount || 0 }}</div>
+        </div>
+
+        <div v-if="cloudLoggedIn" class="mb-4 flex flex-wrap gap-2">
+          <el-button size="small" @click="createRecoveryKey">创建并导出恢复密钥</el-button>
+          <el-button size="small" @click="importRecoveryKey">导入恢复密钥</el-button>
+          <el-button size="small" @click="loadSyncDetails">刷新设备与冲突</el-button>
+          <el-button size="small" type="danger" plain @click="resetSyncSpace">清空云端并重新初始化</el-button>
+        </div>
+        <div v-if="cloudLoggedIn && syncDevices.length" class="mb-4 rounded-md border border-gray-200 p-3 text-sm">
+          <h3 class="mb-2 font-semibold">同步设备</h3>
+          <div v-for="device in syncDevices" :key="device.deviceId" class="flex items-center justify-between border-t py-2 first:border-0">
+            <span>{{ device.name || device.deviceId }}<span v-if="device.deviceId === cloudStatus.deviceId">（本机）</span></span>
+            <el-button v-if="!device.revokedAt && device.deviceId !== cloudStatus.deviceId" size="small" type="danger" plain @click="revokeSyncDevice(device.deviceId)">撤销</el-button>
+            <el-tag v-else-if="device.revokedAt" type="info">已撤销</el-tag>
+          </div>
+        </div>
+        <div v-if="cloudLoggedIn && syncConflicts.length" class="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
+          <h3 class="mb-2 font-semibold text-amber-800">待处理同步冲突</h3>
+          <div v-for="item in syncConflicts" :key="item.id" class="border-t border-amber-200 py-2 first:border-0">
+            <div class="mb-2">{{ item.entity_type }} / {{ item.entity_id }}</div>
+            <el-button size="small" @click="resolveSyncConflict(item, 'local')">保留本机</el-button>
+            <el-button size="small" @click="resolveSyncConflict(item, 'remote')">采用远端</el-button>
+            <el-button size="small" @click="mergeSyncConflict(item)">手工合并</el-button>
+            <div v-if="item.branches?.length > 2" class="mt-2 text-xs text-amber-700">
+              检测到 {{ item.branches.length }} 个并发分支：
+              <el-button v-for="(branch, index) in item.branches" :key="branch.opId" class="ml-1" size="small" text @click="resolveSyncBranch(item, branch)">采用分支 {{ index + 1 }}{{ branch.deleted ? '（删除）' : '' }}</el-button>
+            </div>
+          </div>
         </div>
 
         <div class="flex justify-end gap-2">
@@ -321,7 +352,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Document, FolderOpened, Search } from '@element-plus/icons-vue'
 import { fetchToolsConfig, testFfmpegConfig, testLive2dCatalog, updateToolsConfig } from '../utils/api/tools'
 import { featureGroups, featureKey as featureItemKey, matchesFeatureQuery } from '../data/features'
@@ -406,6 +437,8 @@ const cloudStatus = reactive({ loggedIn: false, username: '', role: '', lastSync
 const cloudLoggedIn = computed(() => cloudStatus.loggedIn)
 const cloudLoading = ref(false)
 const cloudSyncing = ref(false)
+const syncDevices = ref([])
+const syncConflicts = ref([])
 const cloudStatusLabel = computed(() => cloudLoggedIn.value ? '已连接' : '未连接')
 const cloudTagType = computed(() => cloudLoggedIn.value ? 'success' : 'info')
 
@@ -569,6 +602,58 @@ async function loadCloudStatus() {
     Object.assign(cloudStatus, res.data)
     if (res.data.url) cloudForm.url = res.data.url
     if (res.data.username) cloudForm.username = res.data.username
+    if (res.data.loggedIn && !res.data.locked) await loadSyncDetails()
+  }
+}
+
+async function createRecoveryKey() {
+  const res = await window.electronAPI?.cloudSync?.createRecoveryKey?.()
+  if (res?.ok) { ElMessage.success('恢复密钥已保存，请妥善离线备份'); await loadCloudStatus() }
+  else if (res?.error !== '已取消') ElMessage.error(res?.error || '创建失败')
+}
+async function importRecoveryKey() {
+  const res = await window.electronAPI?.cloudSync?.importRecoveryKey?.()
+  if (res?.ok) { ElMessage.success('恢复密钥已导入'); await loadCloudStatus() }
+  else if (res?.error !== '已取消') ElMessage.error(res?.error || '导入失败')
+}
+async function loadSyncDetails() {
+  const [devices, conflicts] = await Promise.all([window.electronAPI?.cloudSync?.listDevices?.(), window.electronAPI?.cloudSync?.listConflicts?.()])
+  if (devices?.ok) syncDevices.value = devices.data || []
+  if (conflicts?.ok) syncConflicts.value = conflicts.data || []
+}
+async function revokeSyncDevice(id) {
+  const res = await window.electronAPI?.cloudSync?.revokeDevice?.(id)
+  if (res?.ok) { ElMessage.success('设备已撤销'); await loadSyncDetails() } else ElMessage.error(res?.error || '撤销失败')
+}
+async function resetSyncSpace() {
+  try {
+    await ElMessageBox.confirm('这会永久清空当前账号的云端同步空间，本机数据不会删除。下次同步会重新上传本机基线。', '确认重置同步空间', { type: 'warning', confirmButtonText: '确认清空' })
+    const res = await window.electronAPI?.cloudSync?.resetSpace?.()
+    if (!res?.ok) throw new Error(res?.error || '重置失败')
+    ElMessage.success('云端同步空间已清空')
+    await loadCloudStatus()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error?.message || '重置失败')
+  }
+}
+async function resolveSyncConflict(item, choice) {
+  const res = await window.electronAPI?.cloudSync?.resolveConflict?.(item.id, choice)
+  if (res?.ok) { ElMessage.success('冲突已解决，将在下次同步传播'); await loadCloudStatus() } else ElMessage.error(res?.error || '处理失败')
+}
+async function resolveSyncBranch(item, branch) {
+  const res = await window.electronAPI?.cloudSync?.resolveConflict?.(item.id, 'merged', branch.value, branch.deleted)
+  if (res?.ok) { ElMessage.success('冲突分支已采用，将在下次同步传播'); await loadCloudStatus() } else ElMessage.error(res?.error || '处理失败')
+}
+async function mergeSyncConflict(item) {
+  try {
+    const { value } = await ElMessageBox.prompt('输入合并后的 JSON', '手工解决同步冲突', { inputType: 'textarea', inputValue: JSON.stringify(item.localValue, null, 2), confirmButtonText: '保存合并结果' })
+    const merged = JSON.parse(value)
+    const res = await window.electronAPI?.cloudSync?.resolveConflict?.(item.id, 'merged', merged, false)
+    if (!res?.ok) throw new Error(res?.error || '处理失败')
+    ElMessage.success('冲突已合并，将在下次同步传播')
+    await loadCloudStatus()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error?.message || '请输入合法 JSON')
   }
 }
 

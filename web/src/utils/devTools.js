@@ -1,4 +1,5 @@
 import { ElMessage } from 'element-plus'
+import { persistentStorage } from './sqliteStorage'
 
 const STORE_FALLBACK_KEY = 'ranpak:dev-tools:store'
 
@@ -39,7 +40,7 @@ export async function loadDevToolStore() {
     return await window.electronAPI.devTools.loadDevToolStore()
   }
   try {
-    return JSON.parse(localStorage.getItem(STORE_FALLBACK_KEY) || '{}')
+    return JSON.parse(persistentStorage.getItem(STORE_FALLBACK_KEY) || '{}')
   } catch {
     return {}
   }
@@ -49,7 +50,7 @@ export async function saveDevToolStore(store) {
   if (window.electronAPI?.devTools?.saveDevToolStore) {
     return await window.electronAPI.devTools.saveDevToolStore(store || {})
   }
-  localStorage.setItem(STORE_FALLBACK_KEY, JSON.stringify(store || {}))
+  persistentStorage.setItem(STORE_FALLBACK_KEY, JSON.stringify(store || {}))
   return store || {}
 }
 
