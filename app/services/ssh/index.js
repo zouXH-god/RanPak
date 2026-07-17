@@ -6,6 +6,7 @@ const { Client } = require("ssh2");
 const localStore = require('../local-store');
 
 const SENSITIVE_FIELDS = ["password", "passphrase"];
+const PORTABLE_SECRET_PREFIX = "ranpak-secret-v1:";
 const DEFAULT_KEEPALIVE_INTERVAL = 15000;
 const IMPORT_COLLECTION_KEYS = ["data", "items", "profiles", "servers", "list", "records"];
 const IP_V4_REGEX = /^(\d{1,3}\.){3}\d{1,3}$/;
@@ -123,6 +124,7 @@ class SshRuntime {
         this.sessions = new Map();
         this.tunnels = new Map();
         this.nextTunnelId = 1;
+        this.migratePortableSecrets();
     }
 
     ensureEncryptionAvailable() {
@@ -134,15 +136,48 @@ class SshRuntime {
     encrypt(value) {
         const text = String(value || "");
         if (!text) return "";
-        this.ensureEncryptionAvailable();
-        return this.safeStorage.encryptString(text).toString("base64");
+        return PORTABLE_SECRET_PREFIX + Buffer.from(text, "utf8").toString("base64");
     }
 
     decrypt(value) {
         const text = String(value || "");
         if (!text) return "";
+        if (text.startsWith(PORTABLE_SECRET_PREFIX)) {
+            return Buffer.from(text.slice(PORTABLE_SECRET_PREFIX.length), "base64").toString("utf8");
+        }
         this.ensureEncryptionAvailable();
-        return this.safeStorage.decryptString(Buffer.from(text, "base64"));
+        try {
+            return this.safeStorage.decryptString(Buffer.from(text, "base64"));
+        } catch {
+            throw new Error("SSH 凭据仍使用其他设备的本地密钥加密。请先在原设备升级并完成一次同步，然后在本机执行强制同步；也可以重新输入该连接的凭据。");
+        }
+    }
+
+    migratePortableSecrets() {
+        if (localStore.getMeta("ssh_portable_secrets_v1") === "done") return { migrated: 0, failed: 0 };
+        let migrated = 0;
+        let failed = 0;
+        const migrateValue = (value) => {
+            const text = String(value || "");
+            if (!text || text.startsWith(PORTABLE_SECRET_PREFIX)) return text;
+            try { migrated += 1; return this.encrypt(this.safeStorage.decryptString(Buffer.from(text, "base64"))); }
+            catch { failed += 1; return text; }
+        };
+        for (const row of localStore.list("ssh_profile")) {
+            const profile = row.value;
+            for (const field of SENSITIVE_FIELDS) if (profile.secrets?.[field]) profile.secrets[field] = migrateValue(profile.secrets[field]);
+            for (const hop of profile.jumpHosts || []) for (const field of SENSITIVE_FIELDS) if (hop.secrets?.[field]) hop.secrets[field] = migrateValue(hop.secrets[field]);
+            localStore.put("ssh_profile", row.entity_id, profile);
+        }
+        for (const row of localStore.list("ssh_private_key")) {
+            const key = row.value;
+            if (key.content) key.content = migrateValue(key.content);
+            if (key.password) key.password = migrateValue(key.password);
+            localStore.put("ssh_private_key", row.entity_id, key);
+        }
+        if (!failed) localStore.setMeta("ssh_portable_secrets_v1", "done");
+        else localStore.setMeta("ssh_portable_secrets_v1_errors", String(failed));
+        return { migrated, failed };
     }
 
     readStore() {

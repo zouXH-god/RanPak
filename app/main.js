@@ -2832,6 +2832,8 @@ app.whenReady().then(async () => {
         if (change.origin !== 'remote' && localStore.isSyncable(change.type, change.id)) syncV2.schedule();
     });
     try { const cached=path.join(process.env.RAN_PAK_RUNTIME_DIR,'data','sync-key.bin'); if(safeStorage.isEncryptionAvailable()&&fs.existsSync(cached)){const raw=Buffer.from(safeStorage.decryptString(fs.readFileSync(cached)),'base64');syncCrypto.importFromCache(raw);} } catch(e) { console.error('[sync] cached key unavailable:',e.message); }
+    // 恢复同步密钥后、自动同步启动前，将旧版 SSH 内层密文转换为跨设备可同步格式。
+    getSshRuntime();
     const { startApiServer } = require('./services/api-server');
     apiRuntime = await startApiServer();
     process.env.RAN_PAK_API_BASE_URL = apiRuntime.baseUrl;

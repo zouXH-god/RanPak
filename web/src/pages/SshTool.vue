@@ -1494,7 +1494,7 @@ async function openConnectionDialog(profile = null) {
   configSearchQuery.value = ''
   await refreshAll()
   await loadPrivateKeys()
-  expandedFolderIds.value = new Set(folders.value.map((folder) => folder.id))
+  expandedFolderIds.value = new Set()
   if (profile?.id) selectProfileNode(profile.id)
   else selectRootNode()
 }

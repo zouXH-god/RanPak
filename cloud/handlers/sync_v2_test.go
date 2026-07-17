@@ -138,7 +138,8 @@ func TestSyncV2StatusReturnsLatestEntityOverview(t *testing.T) {
 	var response struct {
 		Data struct {
 			Overview map[string]struct {
-				Count int64 `json:"count"`
+				Count     int64 `json:"count"`
+				UpdatedAt int64 `json:"updatedAt"`
 			} `json:"overview"`
 		} `json:"data"`
 	}
@@ -147,5 +148,8 @@ func TestSyncV2StatusReturnsLatestEntityOverview(t *testing.T) {
 	}
 	if response.Data.Overview["ssh_profiles"].Count != 1 || response.Data.Overview["dns_accounts"].Count != 1 || response.Data.Overview["ai_config"].Count != 1 {
 		t.Fatalf("unexpected overview: %s", w.Body.String())
+	}
+	if response.Data.Overview["ssh_profiles"].UpdatedAt <= 0 {
+		t.Fatalf("overview updatedAt was not converted to unix milliseconds: %s", w.Body.String())
 	}
 }

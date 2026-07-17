@@ -209,16 +209,17 @@ func SyncV2Status(c *gin.Context) {
 	type overviewRow struct {
 		Category  string
 		Count     int64
-		UpdatedAt time.Time
+		UpdatedAt int64
 	}
 	var rows []overviewRow
-	database.DB.Raw(`
+	if err := database.DB.Raw(`
 		SELECT CASE
 			WHEN current.entity_type='app_config' AND current.entity_id='ai' THEN 'ai_config'
 			WHEN current.entity_type='ssh_profile' THEN 'ssh_profiles'
 			WHEN current.entity_type='ssh_history' THEN 'ssh_history'
 			WHEN current.entity_type='dns_account' THEN 'dns_accounts'
-		END AS category, COUNT(*) AS count, MAX(current.created_at) AS updated_at
+		END AS category, COUNT(*) AS count,
+		CAST((julianday(MAX(current.created_at)) - 2440587.5) * 86400000 AS INTEGER) AS updated_at
 		FROM sync_operations current
 		JOIN (
 			SELECT entity_type, entity_id, MAX(seq) AS seq
@@ -227,13 +228,16 @@ func SyncV2Status(c *gin.Context) {
 		WHERE current.user_id=? AND current.deleted=0 AND (
 			(current.entity_type='app_config' AND current.entity_id='ai') OR
 			current.entity_type IN ('ssh_profile','ssh_history','dns_account')
-		) GROUP BY category`, userID, userID).Scan(&rows)
+		) GROUP BY category`, userID, userID).Scan(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "同步数据统计失败"})
+		return
+	}
 	overview := map[string]gin.H{
 		"ai_config": {"count": int64(0), "updatedAt": int64(0)}, "ssh_profiles": {"count": int64(0), "updatedAt": int64(0)},
 		"ssh_history": {"count": int64(0), "updatedAt": int64(0)}, "dns_accounts": {"count": int64(0), "updatedAt": int64(0)},
 	}
 	for _, row := range rows {
-		overview[row.Category] = gin.H{"count": row.Count, "updatedAt": row.UpdatedAt.UnixMilli()}
+		overview[row.Category] = gin.H{"count": row.Count, "updatedAt": row.UpdatedAt}
 	}
 	var operationCount, deviceCount int64
 	database.DB.Model(&models.SyncOperation{}).Where("user_id=?", userID).Count(&operationCount)
